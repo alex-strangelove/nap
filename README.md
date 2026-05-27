@@ -123,7 +123,7 @@ nix-env -iA nixpkgs.nap
 Install with Go:
 
 ```sh
-go install github.com/maaslalani/nap@main
+go install github.com/alex-strangelove/nap/cmd/nap@main
 ```
 
 Build from source on Debian/Ubuntu:

@@ -1,4 +1,4 @@
-package main
+package nap
 
 import "github.com/charmbracelet/bubbles/key"
 

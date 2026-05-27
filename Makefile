@@ -15,7 +15,7 @@ bootstrap: apt-deps build
 
 build:
 	mkdir -p $(BUILD_DIR)
-	$(GO) build -o $(BUILD_DIR)/$(BINARY) .
+	$(GO) build -o $(BUILD_DIR)/$(BINARY) ./cmd/nap
 
 test:
 	$(GO) test ./...

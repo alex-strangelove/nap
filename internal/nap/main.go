@@ -1,4 +1,4 @@
-package main
+package nap
 
 import (
 	"bufio"
@@ -40,7 +40,7 @@ Create:
   nap example/main.go < main.go - save snippet with name`)
 )
 
-func main() {
+func Main() {
 	runCLI(os.Args[1:])
 }
 
