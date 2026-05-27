@@ -351,7 +351,7 @@ func runInteractiveMode(config Config, snippets []Snippet) error {
 	if len(folderItems) <= 0 {
 		folderItems = append(folderItems, list.Item(Folder(defaultSnippetFolder)))
 	}
-	folderList := list.New(folderItems, folderDelegate{defaultStyles.Folders.Blurred}, 0, 0)
+	folderList := list.New(folderItems, folderDelegate{styles: defaultStyles.Folders.Blurred}, 0, 0)
 	folderList.Title = "Folders"
 
 	folderList.SetShowHelp(false)
@@ -428,7 +428,7 @@ func runInteractiveMode(config Config, snippets []Snippet) error {
 }
 
 func newList(items []list.Item, height int, styles SnippetsBaseStyle) *list.Model {
-	snippetList := list.New(items, snippetDelegate{styles, navigatingState}, 25, height)
+	snippetList := list.New(items, snippetDelegate{styles: styles, state: navigatingState}, 25, height)
 	snippetList.SetShowHelp(false)
 	snippetList.SetShowFilter(false)
 	snippetList.SetShowTitle(false)

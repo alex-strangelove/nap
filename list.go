@@ -19,17 +19,24 @@ func (s Snippet) FilterValue() string {
 
 // snippetDelegate represents the snippet list item.
 type snippetDelegate struct {
-	styles SnippetsBaseStyle
-	state  state
+	styles  SnippetsBaseStyle
+	state   state
+	compact bool
 }
 
 // Height is the number of lines the snippet list item takes up.
 func (d snippetDelegate) Height() int {
+	if d.compact {
+		return 1
+	}
 	return 2
 }
 
 // Spacing is the number of lines to insert between list items.
 func (d snippetDelegate) Spacing() int {
+	if d.compact {
+		return 0
+	}
 	return 1
 }
 
@@ -65,6 +72,17 @@ func (d snippetDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		subtitleStyle = d.styles.DeletedSubtitle
 	}
 
+	if d.compact {
+		titleWidth := compactTitleWidth(m.Width())
+		label := truncate.Truncate(s.Name, titleWidth, "...", truncate.PositionEnd)
+		if index == m.Index() {
+			fmt.Fprint(w, " "+titleStyle.Render(">"+label))
+			return
+		}
+		fmt.Fprint(w, " "+d.styles.UnselectedTitle.Render(" "+label))
+		return
+	}
+
 	if index == m.Index() {
 		fmt.Fprintln(w, "  "+titleStyle.Render(truncate.Truncate(s.Name, 30, "...", truncate.PositionEnd)))
 		fmt.Fprint(w, "  "+subtitleStyle.Render(s.Folder+" • "+humanizeTime(s.Date)))
@@ -83,7 +101,10 @@ func (f Folder) FilterValue() string {
 }
 
 // folderDelegate represents a folder list item.
-type folderDelegate struct{ styles FoldersBaseStyle }
+type folderDelegate struct {
+	styles  FoldersBaseStyle
+	compact bool
+}
 
 // Height is the number of lines the folder list item takes up.
 func (d folderDelegate) Height() int {
@@ -105,6 +126,16 @@ func (d folderDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
 func (d folderDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	f, ok := item.(Folder)
 	if !ok {
+		return
+	}
+	if d.compact {
+		titleWidth := compactTitleWidth(m.Width())
+		label := truncate.Truncate(string(f), titleWidth, "...", truncate.PositionEnd)
+		if index == m.Index() {
+			fmt.Fprint(w, " "+d.styles.Selected.Render(">"+label))
+			return
+		}
+		fmt.Fprint(w, " "+d.styles.Unselected.Render(" "+label))
 		return
 	}
 	fmt.Fprint(w, "  ")
@@ -140,4 +171,11 @@ var magnitudes = []humanize.RelTimeMagnitude{
 
 func humanizeTime(t time.Time) string {
 	return humanize.CustomRelTime(t, time.Now(), "ago", "from now", magnitudes)
+}
+
+func compactTitleWidth(width int) int {
+	if width <= 4 {
+		return 1
+	}
+	return width - 4
 }

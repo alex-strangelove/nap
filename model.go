@@ -22,7 +22,15 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-const maxPane = 3
+const (
+	maxPane = 3
+
+	expandedSnippetPaneWidth  = 35
+	expandedFolderPaneWidth   = 22
+	collapsedSnippetPaneWidth = 12
+	collapsedFolderPaneWidth  = 10
+	minContentPaneWidth       = 20
+)
 
 type pane int
 
@@ -64,6 +72,7 @@ type Model struct {
 	help help.Model
 	// the height of the terminal.
 	height int
+	width  int
 	// the working directory.
 	Workdir string
 	// the List of snippets to display to the user.
@@ -150,7 +159,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateContentMsg:
 		return m.updateContentView(msg)
 	case changeStateMsg:
-		m.List().SetDelegate(snippetDelegate{m.ListStyle, msg.newState})
+		m.List().SetDelegate(snippetDelegate{styles: m.ListStyle, state: msg.newState, compact: m.isCollapsedPreview()})
 
 		var cmd tea.Cmd
 
@@ -238,6 +247,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateActivePane(msg)
 		return m, cmd
 	case tea.WindowSizeMsg:
+		m.width = msg.Width
 		m.height = msg.Height - 4
 		for _, li := range m.Lists {
 			li.SetHeight(m.height)
@@ -245,8 +255,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Folders.SetHeight(m.height)
 		m.Code.Height = m.height
 		m.LineNumbers.Height = m.height
-		m.Code.Width = msg.Width - m.List().Width() - m.Folders.Width() - 20
-		m.LineNumbers.Width = 5
+		m.updatePaneLayout(msg.Width)
 		return m, nil
 	case tea.KeyMsg:
 		if m.List().FilterState() == list.Filtering {
@@ -497,6 +506,99 @@ func (m *Model) displayKeyHint(hints []keyHint) {
 	m.Code.SetContent(s.String())
 }
 
+func (m *Model) paneWidths() (int, int) {
+	if m.isCollapsedPreview() {
+		return 0, 0
+	}
+	return expandedFolderPaneWidth, expandedSnippetPaneWidth
+}
+
+func (m *Model) updatePaneLayout(totalWidth int) {
+	if totalWidth <= 0 {
+		return
+	}
+
+	folderWidth, snippetWidth := m.paneWidths()
+	m.setFoldersWidth(folderWidth)
+	m.setSnippetsWidth(snippetWidth)
+
+	m.Folders.Title = m.foldersTitle()
+	m.LineNumbers.Width = 5
+	if m.isCollapsedPreview() {
+		m.Code.Width = totalWidth - m.LineNumbers.Width - 2
+	} else {
+		m.Code.Width = totalWidth - snippetWidth - folderWidth - 20
+	}
+	if m.Code.Width < minContentPaneWidth {
+		m.Code.Width = minContentPaneWidth
+	}
+}
+
+func (m *Model) setFoldersWidth(width int) {
+	m.Folders.SetWidth(width)
+	m.FoldersStyle.Base = m.FoldersStyle.Base.Width(width)
+	m.FoldersStyle.TitleBar = m.FoldersStyle.TitleBar.Width(maxWidth(width - 2))
+	m.Folders.Styles.TitleBar = m.FoldersStyle.TitleBar
+	m.Folders.Styles.Title = m.FoldersStyle.Title
+}
+
+func (m *Model) setSnippetsWidth(width int) {
+	m.ListStyle.Base = m.ListStyle.Base.Width(width)
+	m.ListStyle.TitleBar = m.ListStyle.TitleBar.Width(maxWidth(width - 2))
+	m.ListStyle.CopiedTitleBar = m.ListStyle.CopiedTitleBar.Width(maxWidth(width - 2))
+	m.ListStyle.DeletedTitleBar = m.ListStyle.DeletedTitleBar.Width(maxWidth(width - 2))
+
+	for _, li := range m.Lists {
+		li.SetWidth(width)
+		li.Styles.Title = m.ListStyle.Title
+		li.Styles.TitleBar = m.ListStyle.TitleBar
+		li.Styles.StatusBar = lipgloss.NewStyle().Margin(1, 2).Foreground(lipgloss.Color("240")).MaxWidth(maxWidth(width - 2))
+		li.Styles.NoItems = lipgloss.NewStyle().Margin(0, 2).Foreground(lipgloss.Color("8")).MaxWidth(maxWidth(width - 2))
+	}
+}
+
+func (m *Model) foldersTitle() string {
+	if m.isCollapsedPreview() {
+		return ""
+	}
+	return "Folders"
+}
+
+func (m *Model) snippetsTitle() string {
+	if m.isCollapsedPreview() {
+		return ""
+	}
+	return "Snippets"
+}
+
+func (m *Model) isCollapsedPreview() bool {
+	return m.pane == contentPane && m.state == navigatingState
+}
+
+func (m *Model) contentHeader() string {
+	if m.state == editingState {
+		return lipgloss.JoinHorizontal(lipgloss.Left,
+			m.inputs[folderInput].View(),
+			m.ContentStyle.Separator.Render("/"),
+			m.inputs[nameInput].View(),
+			m.ContentStyle.Separator.Render("."),
+			m.inputs[languageInput].View(),
+		)
+	}
+
+	if m.isCollapsedPreview() {
+		return m.ContentStyle.Title.Render(m.selectedSnippet().String())
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Left,
+		m.ContentStyle.Title.Render(m.selectedSnippet().Folder),
+		m.ContentStyle.Separator.Render("/"),
+		m.ContentStyle.Title.Render(m.selectedSnippet().Name),
+		m.ContentStyle.Separator.Render("."),
+		m.ContentStyle.Title.Render(m.selectedSnippet().Language),
+	)
+}
+
 // displayError updates the content viewport with the error message provided.
 func (m *Model) displayError(error string) {
 	m.LineNumbers.SetContent(" ~ ")
@@ -544,8 +646,10 @@ func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 		m.LineNumbers, cmd = m.LineNumbers.Update(msg)
 		cmds = append(cmds, cmd)
 	}
-	m.List().SetDelegate(snippetDelegate{m.ListStyle, m.state})
-	m.Folders.SetDelegate(folderDelegate{m.FoldersStyle})
+	m.updatePaneLayout(m.width)
+	compact := m.isCollapsedPreview()
+	m.List().SetDelegate(snippetDelegate{styles: m.ListStyle, state: m.state, compact: compact})
+	m.Folders.SetDelegate(folderDelegate{styles: m.FoldersStyle, compact: compact})
 	m.Folders.Styles.TitleBar = m.FoldersStyle.TitleBar
 	m.Folders.Styles.Title = m.FoldersStyle.Title
 
@@ -639,22 +743,30 @@ func (m *Model) View() string {
 	}
 
 	var (
-		folder   = m.ContentStyle.Title.Render(m.selectedSnippet().Folder)
-		name     = m.ContentStyle.Title.Render(m.selectedSnippet().Name)
-		language = m.ContentStyle.Title.Render(m.selectedSnippet().Language)
-		titleBar = m.ListStyle.TitleBar.Render("Snippets")
+		titleBar      = m.ListStyle.TitleBar.Render(m.snippetsTitle())
+		contentHeader = m.contentHeader()
 	)
 
-	if m.state == editingState {
-		folder = m.inputs[folderInput].View()
-		name = m.inputs[nameInput].View()
-		language = m.inputs[languageInput].View()
-	} else if m.state == copyingState {
+	if m.state == copyingState {
 		titleBar = m.ListStyle.CopiedTitleBar.Render("Copied Snippet!")
 	} else if m.state == deletingState {
 		titleBar = m.ListStyle.DeletedTitleBar.Render("Delete Snippet? (y/N)")
 	} else if m.List().SettingFilter() {
 		titleBar = m.ListStyle.TitleBar.Render(m.List().FilterInput.View())
+	}
+
+	contentBody := lipgloss.JoinHorizontal(lipgloss.Left,
+		m.ContentStyle.LineNumber.Render(m.LineNumbers.View()),
+		m.ContentStyle.Base.Render(strings.ReplaceAll(m.Code.View(), "\t", strings.Repeat(" ", tabSpaces))),
+	)
+
+	if m.isCollapsedPreview() {
+		return lipgloss.JoinVertical(
+			lipgloss.Top,
+			contentHeader,
+			contentBody,
+			marginStyle.Render(m.help.View(m.keys)),
+		)
 	}
 
 	return lipgloss.JoinVertical(
@@ -664,21 +776,19 @@ func (m *Model) View() string {
 			m.FoldersStyle.Base.Render(m.Folders.View()),
 			m.ListStyle.Base.Render(titleBar+m.List().View()),
 			lipgloss.JoinVertical(lipgloss.Top,
-				lipgloss.JoinHorizontal(lipgloss.Left,
-					folder,
-					m.ContentStyle.Separator.Render("/"),
-					name,
-					m.ContentStyle.Separator.Render("."),
-					language,
-				),
-				lipgloss.JoinHorizontal(lipgloss.Left,
-					m.ContentStyle.LineNumber.Render(m.LineNumbers.View()),
-					m.ContentStyle.Base.Render(strings.ReplaceAll(m.Code.View(), "\t", strings.Repeat(" ", tabSpaces))),
-				),
+				contentHeader,
+				contentBody,
 			),
 		),
 		marginStyle.Render(m.help.View(m.keys)),
 	)
+}
+
+func maxWidth(width int) int {
+	if width < 0 {
+		return 0
+	}
+	return width
 }
 
 func (m *Model) saveState() {
