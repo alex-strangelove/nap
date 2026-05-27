@@ -473,6 +473,21 @@ func (m *Model) updateContentView(msg updateContentMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if isMarkdownLanguage(msg.Language) {
+		rendered, err := previewContent(string(content), m.Code.Width)
+		if err != nil {
+			if err == errPreviewerNotFound {
+				m.displayError("Install glow to preview Markdown snippets.")
+			} else {
+				m.displayError(err.Error())
+			}
+			return m, nil
+		}
+		m.writeLineNumbers(lipgloss.Height(rendered))
+		m.Code.SetContent(rendered)
+		return m, nil
+	}
+
 	// b.WriteString(string(content))
 	err = quick.Highlight(&b, string(content), msg.Language, "terminal16m", m.config.Theme)
 	if err != nil {

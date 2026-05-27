@@ -133,6 +133,8 @@ make apt-deps
 make build
 ```
 
+`make apt-deps` installs Go and `glow`, which Nap uses for Markdown previews.
+
 Or download a binary from the [releases](https://github.com/maaslalani/nap/releases).
 
 
@@ -168,6 +170,7 @@ export NAP_CONFIG="~/.nap/config.yaml"
 export NAP_HOME="~/.nap"
 export NAP_DEFAULT_LANGUAGE="go"
 export NAP_THEME="nord"
+export PREVIEWER="/snap/bin/glow"
 
 # Colors
 export NAP_PRIMARY_COLOR="#AFBEE1"

@@ -1,7 +1,7 @@
 GO ?= go
 BINARY ?= nap
 BUILD_DIR ?= bin
-APT_PACKAGES ?= golang-go
+APT_PACKAGES ?= golang-go glow
 
 .PHONY: all apt-deps bootstrap build test clean
 
