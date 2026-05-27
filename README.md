@@ -126,6 +126,13 @@ Install with Go:
 go install github.com/maaslalani/nap@main
 ```
 
+Build from source on Debian/Ubuntu:
+
+```sh
+make apt-deps
+make build
+```
+
 Or download a binary from the [releases](https://github.com/maaslalani/nap/releases).
 
 
