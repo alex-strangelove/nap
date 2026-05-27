@@ -42,8 +42,8 @@ nap
 | Rename selected snippet | <kbd>r</kbd> |
 | Set folder of selected snippet | <kbd>f</kbd> |
 | Set language of selected snippet | <kbd>L</kbd> |
-| Move to next pane | <kbd>tab</kbd> |
-| Move to previous pane | <kbd>shift+tab</kbd> |
+| Move to next pane | <kbd>l</kbd> |
+| Move to previous pane | <kbd>h</kbd> |
 | Search for snippets | <kbd>/</kbd> |
 | Toggle help | <kbd>?</kbd> |
 | Quit application | <kbd>q</kbd> <kbd>ctrl+c</kbd> |
