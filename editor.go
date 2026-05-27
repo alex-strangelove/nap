@@ -13,7 +13,7 @@ import (
 const (
 	defaultEditor    = "nano"
 	defaultPreviewer = "glow"
-	defaultGlowStyle = "dark"
+	defaultGlowStyle = "light"
 )
 
 var errPreviewerNotFound = errors.New("previewer not found")

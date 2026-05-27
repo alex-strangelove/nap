@@ -30,6 +30,7 @@ const (
 	collapsedSnippetPaneWidth = 12
 	collapsedFolderPaneWidth  = 10
 	minContentPaneWidth       = 20
+	previewWidthOffset        = 8
 )
 
 type pane int
@@ -247,6 +248,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateActivePane(msg)
 		return m, cmd
 	case tea.WindowSizeMsg:
+		previousCodeWidth := m.Code.Width
 		m.width = msg.Width
 		m.height = msg.Height - 4
 		for _, li := range m.Lists {
@@ -256,6 +258,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Code.Height = m.height
 		m.LineNumbers.Height = m.height
 		m.updatePaneLayout(msg.Width)
+		if m.Code.Width != previousCodeWidth {
+			return m, m.updateContent()
+		}
 		return m, nil
 	case tea.KeyMsg:
 		if m.List().FilterState() == list.Filtering {
@@ -474,7 +479,7 @@ func (m *Model) updateContentView(msg updateContentMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if isMarkdownLanguage(msg.Language) {
-		rendered, err := previewContent(string(content), m.Code.Width)
+		rendered, err := previewContent(string(content), m.previewWidth())
 		if err != nil {
 			if err == errPreviewerNotFound {
 				m.displayError("Install glow to preview Markdown snippets.")
@@ -519,6 +524,10 @@ func (m *Model) displayKeyHint(hints []keyHint) {
 			))
 	}
 	m.Code.SetContent(s.String())
+}
+
+func (m *Model) previewWidth() int {
+	return m.Code.Width + previewWidthOffset
 }
 
 func (m *Model) paneWidths() (int, int) {
@@ -638,6 +647,7 @@ const tabSpaces = 4
 func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
+	previousCodeWidth := m.Code.Width
 	switch m.pane {
 	case folderPane:
 		m.ListStyle = DefaultStyles(m.config).Snippets.Blurred
@@ -667,6 +677,9 @@ func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 	m.Folders.SetDelegate(folderDelegate{styles: m.FoldersStyle, compact: compact})
 	m.Folders.Styles.TitleBar = m.FoldersStyle.TitleBar
 	m.Folders.Styles.Title = m.FoldersStyle.Title
+	if m.Code.Width != previousCodeWidth {
+		cmds = append(cmds, m.updateContent())
+	}
 
 	return tea.Batch(cmds...)
 }
