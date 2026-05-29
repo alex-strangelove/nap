@@ -21,8 +21,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sahilm/fuzzy"
-	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 )
 
 var (
@@ -83,31 +81,35 @@ func runCLI(args []string) {
 //	Notes/Hello.go -> (Notes, Hello, go)
 //	Hello.go       -> (Misc, Hello, go)
 //	Notes/Hello    -> (Notes, Hello, go)
-func parseName(s string) (string, string, string) {
+func parseName(s string) (string, string, string, error) {
 	var (
-		folder    = defaultSnippetFolder
-		name      = defaultSnippetName
-		language  = defaultLanguage
-		remaining string
+		folder   = defaultSnippetFolder
+		name     = defaultSnippetName
+		language = defaultLanguage
 	)
 
-	tokens := strings.Split(s, "/")
-	if len(tokens) > 1 {
-		folder = tokens[0]
-		remaining = tokens[1]
-	} else {
-		remaining = tokens[0]
+	clean := filepath.Clean(s)
+	base := filepath.Base(clean)
+
+	if dir := filepath.Dir(clean); dir != "." {
+		folder = filepath.ToSlash(dir)
 	}
 
-	tokens = strings.Split(remaining, ".")
-	if len(tokens) > 1 {
-		name = tokens[0]
-		language = tokens[1]
-	} else {
-		name = tokens[0]
+	ext := filepath.Ext(base)
+	if ext != "" {
+		language = strings.TrimPrefix(ext, ".")
+		base = strings.TrimSuffix(base, ext)
 	}
 
-	return folder, name, language
+	if base != "" && base != "." {
+		name = base
+	}
+
+	if err := validateSnippetRelativePath(filepath.Join(folder, fmt.Sprintf("%s.%s", name, language))); err != nil {
+		return "", "", "", err
+	}
+
+	return folder, name, language, nil
 }
 
 // readStdin returns the stdin that is piped in to the command line interface.
@@ -199,6 +201,7 @@ func migrateSnippets(config Config, snippets []Snippet) []Snippet {
 // scanSnippets scans for any new/removed snippets and adds them to snippets.json
 func scanSnippets(config Config, snippets []Snippet) []Snippet {
 	var modified bool
+	snippetsPath := filepath.Clean(filepath.Join(config.Home, config.File))
 	snippetExists := func(path string) bool {
 		for _, snippet := range snippets {
 			if path == snippet.Path() {
@@ -208,57 +211,79 @@ func scanSnippets(config Config, snippets []Snippet) []Snippet {
 		return false
 	}
 
-	homeEntries, err := os.ReadDir(config.Home)
+	err := filepath.WalkDir(config.Home, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			fmt.Printf("could not scan %q: %v\n", path, err)
+			return nil
+		}
+
+		if path == config.Home {
+			return nil
+		}
+
+		if strings.HasPrefix(entry.Name(), ".") {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if entry.IsDir() {
+			return nil
+		}
+
+		if filepath.Clean(path) == snippetsPath {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(config.Home, path)
+		if err != nil {
+			fmt.Printf("could not derive relative path for %q: %v\n", path, err)
+			return nil
+		}
+
+		folder := filepath.Dir(relPath)
+		if folder == "." {
+			return nil
+		}
+
+		snippetPath := filepath.Clean(relPath)
+		if snippetExists(snippetPath) {
+			return nil
+		}
+
+		name := filepath.Base(relPath)
+		ext := filepath.Ext(name)
+		snippets = append(snippets, Snippet{
+			Folder:   filepath.ToSlash(folder),
+			Date:     time.Now(),
+			Name:     strings.TrimSuffix(name, ext),
+			File:     name,
+			Language: strings.TrimPrefix(ext, "."),
+			Tags:     make([]string, 0),
+		})
+		modified = true
+		return nil
+	})
 	if err != nil {
 		fmt.Printf("could not scan config home: %v\n", err)
 		return snippets
 	}
 
-	for _, homeEntry := range homeEntries {
-		if !homeEntry.IsDir() {
-			continue
-		}
-		if strings.HasPrefix(homeEntry.Name(), ".") {
-			continue
-		}
-
-		folderPath := filepath.Join(config.Home, homeEntry.Name())
-		folderEntries, err := os.ReadDir(folderPath)
-		if err != nil {
-			fmt.Printf("could not scan %q: %v\n", folderPath, err)
-			continue
-		}
-
-		for _, folderEntry := range folderEntries {
-			if folderEntry.IsDir() {
-				continue
-			}
-
-			snippetPath := filepath.Join(homeEntry.Name(), folderEntry.Name())
-			if !snippetExists(snippetPath) {
-				name := folderEntry.Name()
-				ext := filepath.Ext(name)
-				snippets = append(snippets, Snippet{
-					Folder:   homeEntry.Name(),
-					Date:     time.Now(),
-					Name:     strings.TrimSuffix(name, ext),
-					File:     name,
-					Language: strings.TrimPrefix(ext, "."),
-					Tags:     make([]string, 0),
-				})
-				modified = true
-			}
-		}
-	}
-
 	var idx int
 	for _, snippet := range snippets {
-		snippetPath := filepath.Join(config.Home, snippet.Path())
+		snippetPath, err := snippetStoragePath(config.Home, snippet)
+		if err != nil {
+			modified = true
+			continue
+		}
 		if _, err := os.Stat(snippetPath); !errors.Is(err, fs.ErrNotExist) {
 			snippets[idx] = snippet
 			idx++
-			modified = true
 		}
+	}
+	if idx != len(snippets) {
+		modified = true
 	}
 	snippets = snippets[:idx]
 
@@ -276,14 +301,22 @@ func saveSnippet(content string, args []string, config Config, snippets []Snippe
 		name = strings.Join(args, " ")
 	}
 
-	folder, name, language := parseName(name)
+	folder, name, language, err := parseName(name)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	file := fmt.Sprintf("%s.%s", name, language)
-	filePath := filepath.Join(config.Home, folder, file)
+	filePath, err := resolveHomePath(config.Home, filepath.Join(folder, file))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	if err := os.MkdirAll(filepath.Dir(filePath), os.ModePerm); err != nil {
 		fmt.Println("unable to create folder")
 		return
 	}
-	err := os.WriteFile(filePath, []byte(content), 0o644)
+	err = os.WriteFile(filePath, []byte(content), 0o644)
 	if err != nil {
 		fmt.Println("unable to create snippet")
 		return
@@ -341,17 +374,35 @@ func runInteractiveMode(config Config, snippets []Snippet) error {
 	}
 
 	defaultStyles := DefaultStyles(config)
+	lists := map[Folder]*list.Model{}
+	for folder, items := range folders {
+		lists[folder] = newList(items, 20, defaultStyles.Snippets.Focused)
+	}
+	ensureAncestorLists(lists, 20, defaultStyles.Snippets.Focused)
 
-	var folderItems []list.Item
-	foldersSlice := maps.Keys(folders)
-	slices.Sort(foldersSlice)
-	for _, folder := range foldersSlice {
-		folderItems = append(folderItems, list.Item(folder))
+	folderExpanded := make(map[Folder]bool, len(state.ExpandedFolders))
+	for _, folder := range state.ExpandedFolders {
+		folderExpanded[Folder(folder)] = true
 	}
-	if len(folderItems) <= 0 {
-		folderItems = append(folderItems, list.Item(Folder(defaultSnippetFolder)))
+
+	tree := buildFolderTree(lists)
+	currentFolder := Folder(defaultSnippetFolder)
+	if state.CurrentFolder != "" {
+		if _, ok := lists[Folder(state.CurrentFolder)]; ok {
+			currentFolder = Folder(state.CurrentFolder)
+		}
 	}
-	folderList := list.New(folderItems, folderDelegate{styles: defaultStyles.Folders.Blurred}, 0, 0)
+	for _, ancestor := range ancestorFolders(currentFolder) {
+		folderExpanded[ancestor] = true
+	}
+
+	folderItems := tree.visibleItems(folderExpanded)
+	folderList := list.New(folderItems, folderDelegate{
+		styles:   defaultStyles.Folders.Blurred,
+		depths:   tree.depths,
+		expanded: folderExpanded,
+		children: tree.children,
+	}, 0, 0)
 	folderList.Title = "Folders"
 
 	folderList.SetShowHelp(false)
@@ -360,42 +411,35 @@ func runInteractiveMode(config Config, snippets []Snippet) error {
 	folderList.DisableQuitKeybindings()
 	folderList.Styles.NoItems = lipgloss.NewStyle().Margin(0, 2).Foreground(lipgloss.Color(config.GrayColor))
 	folderList.SetStatusBarItemName("folder", "folders")
-
-	for idx, folder := range foldersSlice {
-		if string(folder) == state.CurrentFolder {
-			folderList.Select(idx)
-			break
-		}
-	}
+	folderList.Select(visibleFolderIndex(folderItems, currentFolder, tree.parents))
 
 	content := viewport.New(80, 0)
 
-	lists := map[Folder]*list.Model{}
-
-	currentFolder := folderList.SelectedItem().(Folder)
-	for folder, items := range folders {
-		snippetList := newList(items, 20, defaultStyles.Snippets.Focused)
-		if folder == currentFolder {
-			for idx, item := range snippetList.Items() {
-				if s, ok := item.(Snippet); ok && s.File == state.CurrentSnippet {
-					snippetList.Select(idx)
-					break
-				}
+	currentFolder = folderList.SelectedItem().(Folder)
+	for folder, snippetList := range lists {
+		if folder != currentFolder {
+			continue
+		}
+		for idx, item := range snippetList.Items() {
+			if s, ok := item.(Snippet); ok && s.File == state.CurrentSnippet {
+				snippetList.Select(idx)
+				break
 			}
 		}
-		lists[folder] = snippetList
 	}
 
 	m := &Model{
-		Lists:        lists,
-		Folders:      folderList,
-		Code:         content,
-		ContentStyle: defaultStyles.Content.Blurred,
-		ListStyle:    defaultStyles.Snippets.Focused,
-		FoldersStyle: defaultStyles.Folders.Blurred,
-		keys:         DefaultKeyMap,
-		help:         help.New(),
-		config:       config,
+		Lists:          lists,
+		Folders:        folderList,
+		folderTree:     tree,
+		folderExpanded: folderExpanded,
+		Code:           content,
+		ContentStyle:   defaultStyles.Content.Blurred,
+		ListStyle:      defaultStyles.Snippets.Focused,
+		FoldersStyle:   defaultStyles.Folders.Blurred,
+		keys:           DefaultKeyMap,
+		help:           help.New(),
+		config:         config,
 		inputs: []textinput.Model{
 			newTextInput(defaultSnippetFolder + " "),
 			newTextInput(defaultSnippetName + " "),

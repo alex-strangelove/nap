@@ -59,7 +59,10 @@ func (s Snippet) Path() string {
 // Content returns the snippet contents.
 func (s Snippet) Content(highlight bool) string {
 	config := readConfig()
-	file := filepath.Join(config.Home, s.Path())
+	file, err := snippetStoragePath(config.Home, s)
+	if err != nil {
+		return ""
+	}
 	content, err := os.ReadFile(file)
 	if err != nil {
 		return ""

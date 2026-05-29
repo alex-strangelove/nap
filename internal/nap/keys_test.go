@@ -21,14 +21,30 @@ func TestPaneNavigationUsesHLKeys(t *testing.T) {
 		t.Fatalf("pane after pressing l is incorrect: got %v want %v", m.pane, contentPane)
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if m.pane != snippetPane {
+		t.Fatalf("pane after pressing h is incorrect: got %v want %v", m.pane, snippetPane)
+	}
+}
+
+func TestPaneNavigationStopsAtEdges(t *testing.T) {
+	m := newTestModel()
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
 	if m.pane != folderPane {
-		t.Fatalf("pane after pressing l twice is incorrect: got %v want %v", m.pane, folderPane)
+		t.Fatalf("pane after pressing h from snippets is incorrect: got %v want %v", m.pane, folderPane)
 	}
 
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if m.pane != folderPane {
+		t.Fatalf("pane after pressing h at left edge is incorrect: got %v want %v", m.pane, folderPane)
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if m.pane != contentPane {
-		t.Fatalf("pane after pressing h is incorrect: got %v want %v", m.pane, contentPane)
+		t.Fatalf("pane after pressing l at right edge is incorrect: got %v want %v", m.pane, contentPane)
 	}
 }
 
@@ -90,29 +106,88 @@ func newTestModel() *Model {
 	styles := DefaultStyles(config)
 	snippet := defaultSnippet
 
-	folderList := list.New([]list.Item{Folder(defaultSnippetFolder)}, folderDelegate{styles: styles.Folders.Blurred}, 0, 0)
-	folderList.Select(0)
 	lists := map[Folder]*list.Model{
 		Folder(defaultSnippetFolder): newList([]list.Item{snippet}, 20, styles.Snippets.Focused),
 	}
+	tree := buildFolderTree(lists)
+	folderExpanded := map[Folder]bool{}
+	folderList := list.New([]list.Item{Folder(defaultSnippetFolder)}, folderDelegate{
+		styles:   styles.Folders.Blurred,
+		depths:   tree.depths,
+		expanded: folderExpanded,
+		children: tree.children,
+	}, 0, 0)
+	folderList.Select(0)
 
 	m := &Model{
-		config:       config,
-		keys:         DefaultKeyMap,
-		help:         help.New(),
-		Lists:        lists,
-		Folders:      folderList,
-		Code:         viewport.New(80, 0),
-		LineNumbers:  viewport.New(5, 0),
-		ListStyle:    styles.Snippets.Focused,
-		FoldersStyle: styles.Folders.Blurred,
-		ContentStyle: styles.Content.Blurred,
+		config:         config,
+		keys:           DefaultKeyMap,
+		help:           help.New(),
+		Lists:          lists,
+		Folders:        folderList,
+		folderTree:     tree,
+		folderExpanded: folderExpanded,
+		Code:           viewport.New(80, 0),
+		LineNumbers:    viewport.New(5, 0),
+		ListStyle:      styles.Snippets.Focused,
+		FoldersStyle:   styles.Folders.Blurred,
+		ContentStyle:   styles.Content.Blurred,
 		inputs: []textinput.Model{
 			newTextInput(defaultSnippetFolder + " "),
 			newTextInput(defaultSnippetName + " "),
 			newTextInput(config.DefaultLanguage),
 		},
 		contentCache: map[contentCacheKey]contentCacheEntry{},
+	}
+	m.updateKeyMap()
+	return m
+}
+
+func newNestedFolderTestModel() *Model {
+	config := newConfig()
+	styles := DefaultStyles(config)
+	lists := map[Folder]*list.Model{
+		Folder("work/backend"): newList([]list.Item{
+			Snippet{
+				Name:     "handler",
+				Folder:   "work/backend",
+				File:     "handler.go",
+				Language: "go",
+			},
+		}, 20, styles.Snippets.Focused),
+	}
+	ensureAncestorLists(lists, 20, styles.Snippets.Focused)
+	tree := buildFolderTree(lists)
+	folderExpanded := map[Folder]bool{}
+	items := tree.visibleItems(folderExpanded)
+	folderList := list.New(items, folderDelegate{
+		styles:   styles.Folders.Blurred,
+		depths:   tree.depths,
+		expanded: folderExpanded,
+		children: tree.children,
+	}, 0, 0)
+	folderList.Select(0)
+
+	m := &Model{
+		config:         config,
+		keys:           DefaultKeyMap,
+		help:           help.New(),
+		Lists:          lists,
+		Folders:        folderList,
+		folderTree:     tree,
+		folderExpanded: folderExpanded,
+		Code:           viewport.New(80, 0),
+		LineNumbers:    viewport.New(5, 0),
+		ListStyle:      styles.Snippets.Focused,
+		FoldersStyle:   styles.Folders.Blurred,
+		ContentStyle:   styles.Content.Blurred,
+		inputs: []textinput.Model{
+			newTextInput(defaultSnippetFolder + " "),
+			newTextInput(defaultSnippetName + " "),
+			newTextInput(config.DefaultLanguage),
+		},
+		contentCache: map[contentCacheKey]contentCacheEntry{},
+		pane:         folderPane,
 	}
 	m.updateKeyMap()
 	return m
@@ -199,5 +274,144 @@ func TestContentPaneScrollSkipsFullPaneRefresh(t *testing.T) {
 	}
 	if got.LineNumbers.YOffset != 1 {
 		t.Fatalf("line number viewport offset mismatch: got %d want 1", got.LineNumbers.YOffset)
+	}
+}
+
+func TestCreateNewSnippetFileCreatesNestedFolderPath(t *testing.T) {
+	tmp := t.TempDir()
+	m := newTestModel()
+	nestedFolder := Folder("foo/bar")
+	m.config.Home = tmp
+	m.Lists[nestedFolder] = newList([]list.Item{}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{nestedFolder})
+	m.Folders.Select(0)
+
+	cmd := m.createNewSnippetFile()
+	if cmd == nil {
+		t.Fatalf("createNewSnippetFile returned nil")
+	}
+	msg := cmd()
+	if _, ok := msg.(changeStateMsg); !ok {
+		t.Fatalf("unexpected createNewSnippetFile message type %T", msg)
+	}
+
+	items := m.Lists[nestedFolder].Items()
+	if len(items) != 1 {
+		t.Fatalf("expected one snippet in nested folder, got %d", len(items))
+	}
+	snippet := items[0].(Snippet)
+	path, err := snippetStoragePath(tmp, snippet)
+	if err != nil {
+		t.Fatalf("could not resolve snippet path: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("nested snippet file was not created: %v", err)
+	}
+}
+
+func TestFolderPaneLeftExpandsAndDescendsTree(t *testing.T) {
+	m := newNestedFolderTestModel()
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if cmd == nil {
+		t.Fatalf("expected folder tree expansion command")
+	}
+
+	updated, cmd = updated.(*Model).Update(cmd())
+	got := updated.(*Model)
+	if got.selectedFolder() != Folder("work/backend") {
+		t.Fatalf("selected folder mismatch: got %q want %q", got.selectedFolder(), Folder("work/backend"))
+	}
+	if !got.folderExpanded[Folder("work")] {
+		t.Fatalf("expected parent folder to be expanded")
+	}
+	if len(got.Folders.Items()) != 2 {
+		t.Fatalf("visible folder count mismatch: got %d want 2", len(got.Folders.Items()))
+	}
+}
+
+func TestFolderPaneLeftOnLeafMovesToSnippets(t *testing.T) {
+	m := newNestedFolderTestModel()
+	m.folderExpanded[Folder("work")] = true
+
+	msg := m.updateFoldersView(Folder("work/backend"), false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	got := updated.(*Model)
+	if got.pane != snippetPane {
+		t.Fatalf("pane mismatch: got %v want %v", got.pane, snippetPane)
+	}
+	if cmd != nil {
+		if _, ok := cmd().(contentRenderedMsg); !ok {
+			t.Fatalf("unexpected follow-up message type %T", cmd())
+		}
+	}
+}
+
+func TestFolderPaneLExpandsAndDescendsTree(t *testing.T) {
+	m := newNestedFolderTestModel()
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if cmd == nil {
+		t.Fatalf("expected folder tree expansion command")
+	}
+
+	updated, _ = updated.(*Model).Update(cmd())
+	got := updated.(*Model)
+	if got.selectedFolder() != Folder("work/backend") {
+		t.Fatalf("selected folder mismatch: got %q want %q", got.selectedFolder(), Folder("work/backend"))
+	}
+	if !got.folderExpanded[Folder("work")] {
+		t.Fatalf("expected parent folder to be expanded")
+	}
+}
+
+func TestFolderPaneHCollapsesToParent(t *testing.T) {
+	m := newNestedFolderTestModel()
+	m.folderExpanded[Folder("work")] = true
+
+	msg := m.updateFoldersView(Folder("work/backend"), false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if cmd == nil {
+		t.Fatalf("expected folder tree collapse command")
+	}
+
+	updated, _ = updated.(*Model).Update(cmd())
+	got := updated.(*Model)
+	if got.selectedFolder() != Folder("work") {
+		t.Fatalf("selected folder mismatch: got %q want %q", got.selectedFolder(), Folder("work"))
+	}
+}
+
+func TestFolderPaneHStopsAtRoot(t *testing.T) {
+	m := newTestModel()
+	m.pane = folderPane
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if cmd != nil {
+		t.Fatalf("expected no command when stopping at root folder")
+	}
+
+	got := updated.(*Model)
+	if got.pane != folderPane {
+		t.Fatalf("pane mismatch: got %v want %v", got.pane, folderPane)
+	}
+}
+
+func TestContentHeaderUsesSelectedFolderForParentNode(t *testing.T) {
+	m := newNestedFolderTestModel()
+	m.pane = folderPane
+
+	header := m.contentHeader()
+	if !strings.Contains(header, "work") {
+		t.Fatalf("content header should include selected folder, got %q", header)
+	}
+	if strings.Contains(header, defaultSnippet.String()) {
+		t.Fatalf("content header should not use default snippet placeholder for empty parent folders")
 	}
 }

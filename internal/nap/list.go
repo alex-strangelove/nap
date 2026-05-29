@@ -96,8 +96,11 @@ func (f Folder) FilterValue() string {
 
 // folderDelegate represents a folder list item.
 type folderDelegate struct {
-	styles  FoldersBaseStyle
-	compact bool
+	styles   FoldersBaseStyle
+	compact  bool
+	depths   map[Folder]int
+	expanded map[Folder]bool
+	children map[Folder][]Folder
 }
 
 // Height is the number of lines the folder list item takes up.
@@ -122,9 +125,12 @@ func (d folderDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	if !ok {
 		return
 	}
+
+	depth := d.depths[f]
+	label := strings.Repeat("  ", depth) + folderIndicator(d.children, d.expanded, f) + folderLabel(f)
 	if d.compact {
 		titleWidth := compactTitleWidth(m.Width())
-		label := truncate.Truncate(string(f), titleWidth, "...", truncate.PositionEnd)
+		label = truncate.Truncate(label, titleWidth, "...", truncate.PositionEnd)
 		if index == m.Index() {
 			fmt.Fprint(w, " "+d.styles.Selected.Render(">"+label))
 			return
@@ -134,10 +140,10 @@ func (d folderDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	}
 	fmt.Fprint(w, "  ")
 	if index == m.Index() {
-		fmt.Fprint(w, d.styles.Selected.Render("→ "+string(f)))
+		fmt.Fprint(w, d.styles.Selected.Render("→ "+label))
 		return
 	}
-	fmt.Fprint(w, d.styles.Unselected.Render("  "+string(f)))
+	fmt.Fprint(w, d.styles.Unselected.Render("  "+label))
 }
 
 const (
@@ -172,4 +178,22 @@ func compactTitleWidth(width int) int {
 		return 1
 	}
 	return width - 4
+}
+
+func folderLabel(folder Folder) string {
+	value := string(folder)
+	if idx := strings.LastIndex(value, "/"); idx >= 0 {
+		return value[idx+1:]
+	}
+	return value
+}
+
+func folderIndicator(children map[Folder][]Folder, expanded map[Folder]bool, folder Folder) string {
+	if len(children[folder]) == 0 {
+		return "• "
+	}
+	if expanded[folder] {
+		return "▾ "
+	}
+	return "▸ "
 }

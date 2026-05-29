@@ -7,6 +7,16 @@ import (
 	"testing"
 )
 
+func TestParseNameSupportsNestedFolders(t *testing.T) {
+	folder, name, language, err := parseName("foo/bar/baz.go")
+	if err != nil {
+		t.Fatalf("parseName returned error: %v", err)
+	}
+	if folder != "foo/bar" || name != "baz" || language != "go" {
+		t.Fatalf("unexpected parseName result: got (%q, %q, %q)", folder, name, language)
+	}
+}
+
 func TestCLI(t *testing.T) {
 	tmp := tmpHome(t)
 
@@ -20,7 +30,7 @@ func TestCLI(t *testing.T) {
 
 		w.WriteString("foo bar baz")
 		w.Close()
-		runCLI([]string{"foo/bar.baz"})
+		runCLI([]string{"foo/bar/baz.go"})
 
 		cfg := readConfig()
 		snippets := readSnippets(cfg)
@@ -30,7 +40,11 @@ func TestCLI(t *testing.T) {
 			t.FailNow()
 		}
 
-		fn := filepath.Join(tmp, "foo/bar.baz")
+		if snippets[0].Folder != "foo/bar" || snippets[0].File != "baz.go" {
+			t.Fatalf("nested snippet metadata mismatch: got folder=%q file=%q", snippets[0].Folder, snippets[0].File)
+		}
+
+		fn := filepath.Join(tmp, "foo", "bar", "baz.go")
 		fi, err := os.Open(fn)
 		if err != nil {
 			t.Logf("could not open test file: %v", err)
@@ -57,7 +71,7 @@ func TestCLI(t *testing.T) {
 			t.FailNow()
 		}
 		os.Stdout = w
-		runCLI([]string{"foo/bar.baz"})
+		runCLI([]string{"foo/bar/baz.go"})
 		w.Close()
 		out, err := io.ReadAll(r)
 		if err != nil {
@@ -86,8 +100,8 @@ func TestCLI(t *testing.T) {
 			t.FailNow()
 		}
 
-		if string(out) != "foo/bar.baz\n" {
-			t.Logf(`snippet is incorrect: got %q but want "foo/bar.baz\n"`, string(out))
+		if string(out) != "foo/bar/baz.go\n" {
+			t.Logf(`snippet is incorrect: got %q but want "foo/bar/baz.go\n"`, string(out))
 			t.FailNow()
 		}
 	})
@@ -101,8 +115,8 @@ func TestScan(t *testing.T) {
 	snippets = scanSnippets(cfg, snippets)
 	initNum := len(snippets)
 
-	tmpSnippetFolder := filepath.Join(tmp, "foo")
-	tmpSnippet := filepath.Join(tmpSnippetFolder, "bar.baz")
+	tmpSnippetFolder := filepath.Join(tmp, "foo", "bar")
+	tmpSnippet := filepath.Join(tmpSnippetFolder, "baz.go")
 	if err := os.MkdirAll(tmpSnippetFolder, os.ModePerm); err != nil {
 		t.Logf("could not create snippet folder: %v", err)
 		t.FailNow()
@@ -112,10 +126,20 @@ func TestScan(t *testing.T) {
 		t.FailNow()
 	}
 
+	if err := os.WriteFile(filepath.Join(tmpSnippetFolder, ".gitkeep"), []byte("hidden"), os.ModePerm); err != nil {
+		t.Fatalf("could not create hidden file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, cfg.File), []byte("[]"), os.ModePerm); err != nil {
+		t.Fatalf("could not rewrite snippets file: %v", err)
+	}
+
 	snippets = scanSnippets(cfg, snippets)
 	if len(snippets) != initNum+1 {
 		t.Logf("incorrect number of snippets after initial scanning: want %d but got %d", initNum+1, len(snippets))
 		t.FailNow()
+	}
+	if snippets[len(snippets)-1].Folder != "foo/bar" {
+		t.Fatalf("nested folder scan mismatch: got %q", snippets[len(snippets)-1].Folder)
 	}
 
 	if err := os.Remove(tmpSnippet); err != nil {
@@ -127,6 +151,18 @@ func TestScan(t *testing.T) {
 	if len(snippets) != initNum {
 		t.Logf("incorrect number of snippets after follow-up scanning: want %d but got %d", initNum, len(snippets))
 		t.FailNow()
+	}
+}
+
+func TestSaveSnippetRejectsPathTraversal(t *testing.T) {
+	tmpHome(t)
+	cfg := readConfig()
+
+	saveSnippet("secret", []string{"../../escape.go"}, cfg, readSnippets(cfg))
+
+	snippets := readSnippets(cfg)
+	if len(snippets) != 0 {
+		t.Fatalf("expected no snippets to be saved for invalid path, got %d", len(snippets))
 	}
 }
 
