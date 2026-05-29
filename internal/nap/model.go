@@ -282,10 +282,10 @@ type updateFoldersMsg struct {
 // updateFolders returns a Cmd to  tell the application that there are possible
 // folder changes to update.
 func (m *Model) updateFolders() tea.Cmd {
-	return m.updateFoldersForSelection(m.selectedFolder(), false)
+	return m.updateFoldersForSelection(m.selectedFolderItem(), false)
 }
 
-func (m *Model) updateFoldersForSelection(selected Folder, refreshContent bool) tea.Cmd {
+func (m *Model) updateFoldersForSelection(selected list.Item, refreshContent bool) tea.Cmd {
 	return func() tea.Msg {
 		return m.updateFoldersView(selected, refreshContent)
 	}
@@ -307,6 +307,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateFoldersMsg:
 		setItemsCmd := m.Folders.SetItems(msg.items)
 		m.Folders.Select(msg.selectedFolderIndex)
+		m.syncSelectedTreeSnippet()
 		var cmd tea.Cmd
 		m.Folders, cmd = m.Folders.Update(msg)
 		cmds := []tea.Cmd{setItemsCmd, cmd}
@@ -602,7 +603,7 @@ func (m *Model) noContentHints() []keyHint {
 }
 
 // updateFolderView updates the folders list to display the current folders.
-func (m *Model) updateFoldersView(selectedFolder Folder, refreshContent bool) tea.Msg {
+func (m *Model) updateFoldersView(selectedItem list.Item, refreshContent bool) tea.Msg {
 	for folder, li := range m.Lists {
 		for i := 0; i < len(li.Items()); {
 			item := li.Items()[i]
@@ -626,12 +627,12 @@ func (m *Model) updateFoldersView(selectedFolder Folder, refreshContent bool) te
 	}
 
 	m.rebuildFolderTree()
-	if selectedFolder == "" {
-		selectedFolder = m.selectedFolder()
+	if selectedItem == nil {
+		selectedItem = m.selectedFolderItem()
 	}
-	m.revealFolder(selectedFolder)
+	m.revealFolder(treeItemFolder(selectedItem))
 	folderItems := m.folderTree.visibleItems(m.folderExpanded)
-	selectedFolderIndex := visibleFolderIndex(folderItems, selectedFolder, m.folderTree.parents)
+	selectedFolderIndex := visibleFolderIndex(folderItems, selectedItem, m.folderTree.parents)
 
 	return updateFoldersMsg{
 		items:               folderItems,
@@ -659,9 +660,22 @@ func (m *Model) updateFolderTreeNavigation(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, false
 	}
 
+	selectedItem := m.selectedFolderItem()
 	selectedFolder := m.selectedFolder()
 	switch msg.String() {
 	case "left", "l":
+		if bound, ok := selectedItem.(boundSnippetItem); ok {
+			m.selectSnippetInFolder(bound.parent, bound.snippet)
+			m.pane = snippetPane
+			return m.updateActivePane(msg), true
+		}
+		if snippet, ok := m.folderTree.boundSnippet(selectedFolder); ok {
+			m.folderExpanded[selectedFolder] = true
+			return m.updateFoldersForSelection(boundSnippetItem{
+				parent:  selectedFolder,
+				snippet: snippet,
+			}, true), true
+		}
 		if child, ok := m.folderTree.firstChild(selectedFolder); ok {
 			m.folderExpanded[selectedFolder] = true
 			m.revealFolder(child)
@@ -671,6 +685,9 @@ func (m *Model) updateFolderTreeNavigation(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.pane = snippetPane
 		return m.updateActivePane(msg), true
 	case "right":
+		if _, ok := selectedItem.(boundSnippetItem); ok {
+			return m.updateFoldersForSelection(selectedFolder, true), true
+		}
 		if m.folderExpanded[selectedFolder] && m.folderTree.hasChildren(selectedFolder) {
 			delete(m.folderExpanded, selectedFolder)
 			return m.updateFoldersForSelection(selectedFolder, false), true
@@ -682,6 +699,9 @@ func (m *Model) updateFolderTreeNavigation(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.pane = snippetPane
 		return m.updateActivePane(msg), true
 	case "h":
+		if _, ok := selectedItem.(boundSnippetItem); ok {
+			return m.updateFoldersForSelection(selectedFolder, true), true
+		}
 		if m.folderExpanded[selectedFolder] && m.folderTree.hasChildren(selectedFolder) {
 			delete(m.folderExpanded, selectedFolder)
 			return m.updateFoldersForSelection(selectedFolder, false), true
@@ -915,13 +935,14 @@ func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 	styles := DefaultStyles(m.config)
 	switch m.pane {
 	case folderPane:
-		previousFolder := m.selectedFolder()
+		previousItem := m.selectedFolderItem()
 		m.ListStyle = styles.Snippets.Blurred
 		m.ContentStyle = styles.Content.Blurred
 		m.FoldersStyle = styles.Folders.Focused
 		m.Folders, cmd = m.Folders.Update(msg)
+		m.syncSelectedTreeSnippet()
 		m.updateKeyMap()
-		refreshContent = m.selectedFolder() != previousFolder
+		refreshContent = !sameTreeItem(previousItem, m.selectedFolderItem())
 		cmds = append(cmds, cmd)
 	case snippetPane:
 		previousSnippet := m.selectedSnippet().Path()
@@ -944,11 +965,12 @@ func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 	compact := m.isCollapsedPreview()
 	m.List().SetDelegate(snippetDelegate{styles: m.ListStyle, state: m.state, compact: compact})
 	m.Folders.SetDelegate(folderDelegate{
-		styles:   m.FoldersStyle,
-		compact:  compact,
-		depths:   m.folderTree.depths,
-		expanded: m.folderExpanded,
-		children: m.folderTree.children,
+		styles:        m.FoldersStyle,
+		compact:       compact,
+		depths:        m.folderTree.depths,
+		expanded:      m.folderExpanded,
+		children:      m.folderTree.children,
+		boundSnippets: m.folderTree.boundSnippets,
 	})
 	m.Folders.Styles.TitleBar = m.FoldersStyle.TitleBar
 	m.Folders.Styles.Title = m.FoldersStyle.Title
@@ -987,11 +1009,15 @@ func (m *Model) selectedSnippet() Snippet {
 
 // selected folder returns the currently selected folder.
 func (m *Model) selectedFolder() Folder {
-	item := m.Folders.SelectedItem()
+	item := m.selectedFolderItem()
 	if item == nil {
 		return Folder(defaultSnippetFolder)
 	}
-	return item.(Folder)
+	return treeItemFolder(item)
+}
+
+func (m *Model) selectedFolderItem() list.Item {
+	return m.Folders.SelectedItem()
 }
 
 // List returns the active list.
@@ -1024,10 +1050,9 @@ func (m *Model) moveSnippetUp() {
 // createNewSnippet creates a new snippet file and adds it to the the list.
 func (m *Model) createNewSnippetFile() tea.Cmd {
 	return func() tea.Msg {
-		folder := defaultSnippetFolder
-		folderItem := m.Folders.SelectedItem()
-		if folderItem != nil && folderItem.FilterValue() != "" {
-			folder = folderItem.FilterValue()
+		folder := string(m.selectedFolder())
+		if folder == "" {
+			folder = defaultSnippetFolder
 		}
 
 		file := fmt.Sprintf("snippet-%d.%s", rand.Intn(1000000), m.config.DefaultLanguage)
@@ -1050,6 +1075,44 @@ func (m *Model) createNewSnippetFile() tea.Cmd {
 
 		m.List().InsertItem(m.List().Index(), newSnippet)
 		return changeStateMsg{navigatingState}
+	}
+}
+
+func (m *Model) syncSelectedTreeSnippet() {
+	item := m.selectedFolderItem()
+	bound, ok := item.(boundSnippetItem)
+	if !ok {
+		return
+	}
+
+	m.selectSnippetInFolder(bound.parent, bound.snippet)
+}
+
+func (m *Model) selectSnippetInFolder(folder Folder, target Snippet) {
+	li, exists := m.Lists[folder]
+	if !exists {
+		return
+	}
+
+	for idx, item := range li.Items() {
+		snippet, ok := item.(Snippet)
+		if ok && snippet.Path() == target.Path() {
+			li.Select(idx)
+			return
+		}
+	}
+}
+
+func sameTreeItem(left, right list.Item) bool {
+	switch l := left.(type) {
+	case Folder:
+		r, ok := right.(Folder)
+		return ok && l == r
+	case boundSnippetItem:
+		r, ok := right.(boundSnippetItem)
+		return ok && l.parent == r.parent && l.snippet.Path() == r.snippet.Path()
+	default:
+		return left == nil && right == nil
 	}
 }
 

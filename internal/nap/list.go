@@ -96,11 +96,12 @@ func (f Folder) FilterValue() string {
 
 // folderDelegate represents a folder list item.
 type folderDelegate struct {
-	styles   FoldersBaseStyle
-	compact  bool
-	depths   map[Folder]int
-	expanded map[Folder]bool
-	children map[Folder][]Folder
+	styles        FoldersBaseStyle
+	compact       bool
+	depths        map[Folder]int
+	expanded      map[Folder]bool
+	children      map[Folder][]Folder
+	boundSnippets map[Folder]Snippet
 }
 
 // Height is the number of lines the folder list item takes up.
@@ -121,13 +122,10 @@ func (d folderDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
 
 // Render renders a folder list item.
 func (d folderDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
-	f, ok := item.(Folder)
-	if !ok {
+	label := d.itemLabel(item)
+	if label == "" {
 		return
 	}
-
-	depth := d.depths[f]
-	label := strings.Repeat("  ", depth) + folderIndicator(d.children, d.expanded, f) + folderLabel(f)
 	if d.compact {
 		titleWidth := compactTitleWidth(m.Width())
 		label = truncate.Truncate(label, titleWidth, "...", truncate.PositionEnd)
@@ -144,6 +142,19 @@ func (d folderDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		return
 	}
 	fmt.Fprint(w, d.styles.Unselected.Render("  "+label))
+}
+
+func (d folderDelegate) itemLabel(item list.Item) string {
+	switch v := item.(type) {
+	case Folder:
+		depth := d.depths[v]
+		return strings.Repeat("  ", depth) + folderIndicator(d.children, d.boundSnippets, d.expanded, v) + folderLabel(v)
+	case boundSnippetItem:
+		depth := d.depths[v.parent] + 1
+		return strings.Repeat("  ", depth) + "• " + v.snippet.Name
+	default:
+		return ""
+	}
 }
 
 const (
@@ -188,9 +199,11 @@ func folderLabel(folder Folder) string {
 	return value
 }
 
-func folderIndicator(children map[Folder][]Folder, expanded map[Folder]bool, folder Folder) string {
+func folderIndicator(children map[Folder][]Folder, boundSnippets map[Folder]Snippet, expanded map[Folder]bool, folder Folder) string {
 	if len(children[folder]) == 0 {
-		return "• "
+		if _, ok := boundSnippets[folder]; !ok {
+			return "• "
+		}
 	}
 	if expanded[folder] {
 		return "▾ "

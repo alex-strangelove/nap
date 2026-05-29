@@ -398,10 +398,11 @@ func runInteractiveMode(config Config, snippets []Snippet) error {
 
 	folderItems := tree.visibleItems(folderExpanded)
 	folderList := list.New(folderItems, folderDelegate{
-		styles:   defaultStyles.Folders.Blurred,
-		depths:   tree.depths,
-		expanded: folderExpanded,
-		children: tree.children,
+		styles:        defaultStyles.Folders.Blurred,
+		depths:        tree.depths,
+		expanded:      folderExpanded,
+		children:      tree.children,
+		boundSnippets: tree.boundSnippets,
 	}, 0, 0)
 	folderList.Title = "Folders"
 
@@ -415,7 +416,7 @@ func runInteractiveMode(config Config, snippets []Snippet) error {
 
 	content := viewport.New(80, 0)
 
-	currentFolder = folderList.SelectedItem().(Folder)
+	currentFolder = treeItemFolder(folderList.SelectedItem())
 	for folder, snippetList := range lists {
 		if folder != currentFolder {
 			continue
