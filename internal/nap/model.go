@@ -22,12 +22,9 @@ import (
 )
 
 const (
-	maxPane = 3
-
-	expandedSnippetPaneWidth  = 35
-	expandedFolderPaneWidth   = 22
-	collapsedSnippetPaneWidth = 12
-	collapsedFolderPaneWidth  = 10
+	expandedFolderPaneWidth   = 32
+	expandedSnippetPaneWidth  = 0
+	collapsedSnippetPaneWidth = 0
 	minContentPaneWidth       = 20
 	previewWidthOffset        = 8
 )
@@ -35,10 +32,11 @@ const (
 type pane int
 
 const (
-	snippetPane pane = iota
-	contentPane
+	contentPane pane = iota
 	folderPane
 )
+
+const snippetPane pane = contentPane
 
 type state int
 
@@ -371,7 +369,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = os.MkdirAll(filepath.Dir(newPath), os.ModePerm)
 				_ = os.Rename(m.selectedSnippetFilePath(), newPath)
 				setCmd := m.List().SetItem(i, snippet)
-				m.pane = snippetPane
+				m.pane = contentPane
 				cmd = tea.Batch(setCmd, m.updateFoldersForSelection(Folder(snippet.Folder), false), m.updateContent())
 			}
 		case pastingState:
@@ -401,7 +399,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = m.focusInput(m.activeInput)
 		case creatingState:
 		case copyingState:
-			m.pane = snippetPane
+			m.pane = contentPane
 			m.state = copyingState
 			m.updateActivePane(msg)
 			cmd = tea.Tick(time.Second, func(t time.Time) tea.Msg {
@@ -435,11 +433,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state == deletingState {
 			switch {
 			case key.Matches(msg, m.keys.Confirm):
-				_ = os.Remove(m.selectedSnippetFilePath())
-				m.List().RemoveItem(m.List().Index())
-				m.state = navigatingState
-				m.updateKeyMap()
-				return m, tea.Batch(changeState(navigatingState), m.updateFolders(), m.updateContent())
+				if _, ok := m.selectedFolderItem().(Snippet); !ok {
+					return m, m.deleteSelectedFolder()
+				}
+				return m, m.deleteSelectedSnippet()
 			case key.Matches(msg, m.keys.Quit, m.keys.Cancel):
 				return m, changeState(navigatingState)
 			}
@@ -475,17 +472,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.NewSnippet):
 			m.state = creatingState
 			return m, m.createNewSnippetFile()
-		case key.Matches(msg, m.keys.MoveSnippetDown):
-			m.moveSnippetDown()
-		case key.Matches(msg, m.keys.MoveSnippetUp):
-			m.moveSnippetUp()
+		case key.Matches(msg, m.keys.NewFolder):
+			if m.pane != folderPane {
+				break
+			}
+			m.state = creatingState
+			return m, m.createNewFolder()
+		case key.Matches(msg, m.keys.NewRootFolder):
+			if m.pane != folderPane {
+				break
+			}
+			m.state = creatingState
+			return m, m.createNewRootFolder()
 		case key.Matches(msg, m.keys.PasteSnippet):
 			return m, changeState(pastingState)
 		case key.Matches(msg, m.keys.RenameSnippet):
 			m.activeInput = nameInput
 			return m, changeState(editingState)
 		case key.Matches(msg, m.keys.ChangeFolder):
-			m.pane = snippetPane
+			m.pane = contentPane
 			cmd := m.updateActivePane(msg)
 			return m, cmd
 		case key.Matches(msg, m.keys.ToggleHelp):
@@ -517,14 +522,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return changeStateMsg{copyingState}
 			}
 		case key.Matches(msg, m.keys.DeleteSnippet):
-			m.pane = snippetPane
+			if _, ok := m.selectedFolderItem().(Snippet); !ok {
+				break
+			}
+			return m, changeState(deletingState)
+		case key.Matches(msg, m.keys.DeleteFolder):
+			if m.pane != folderPane {
+				break
+			}
+			if _, ok := m.selectedFolderItem().(Folder); !ok {
+				break
+			}
+			m.pane = folderPane
 			m.updateActivePane(msg)
-			m.List().Title = "Delete? (y/N)"
+			m.Folders.Title = "Delete folder? (y/N)"
 			return m, changeState(deletingState)
 		case key.Matches(msg, m.keys.EditSnippet):
 			return m, m.editSnippet()
 		case key.Matches(msg, m.keys.Search):
-			m.pane = snippetPane
+			m.pane = folderPane
 		}
 	case tea.MouseMsg:
 		if cmd, ok := m.updateContentScroll(msg); ok {
@@ -569,8 +585,6 @@ func (m *Model) selectedSnippetFilePath() string {
 func (m *Model) nextPane() {
 	switch m.pane {
 	case folderPane:
-		m.pane = snippetPane
-	case snippetPane:
 		m.pane = contentPane
 	}
 }
@@ -579,8 +593,6 @@ func (m *Model) nextPane() {
 func (m *Model) previousPane() {
 	switch m.pane {
 	case contentPane:
-		m.pane = snippetPane
-	case snippetPane:
 		m.pane = folderPane
 	}
 }
@@ -600,6 +612,11 @@ func (m *Model) noContentHints() []keyHint {
 		{m.keys.SetFolder, "set folder"},
 		{m.keys.SetLanguage, "set language"},
 	}
+}
+
+func (m *Model) folderDeletionTarget() (Folder, bool) {
+	folder, ok := m.selectedFolderItem().(Folder)
+	return folder, ok
 }
 
 // updateFolderView updates the folders list to display the current folders.
@@ -624,6 +641,10 @@ func (m *Model) updateFoldersView(selectedItem list.Item, refreshContent bool) t
 			}
 			i++
 		}
+	}
+
+	for _, li := range m.Lists {
+		sortSnippetList(li)
 	}
 
 	m.rebuildFolderTree()
@@ -664,28 +685,28 @@ func (m *Model) updateFolderTreeNavigation(msg tea.KeyMsg) (tea.Cmd, bool) {
 	selectedFolder := m.selectedFolder()
 	switch msg.String() {
 	case "left", "l":
-		if bound, ok := selectedItem.(boundSnippetItem); ok {
-			m.selectSnippetInFolder(bound.parent, bound.snippet)
-			m.pane = snippetPane
+		if snippet, ok := selectedItem.(Snippet); ok {
+			m.selectSnippetInFolder(Folder(snippet.Folder), snippet)
+			m.pane = contentPane
 			return m.updateActivePane(msg), true
 		}
-		if snippet, ok := m.folderTree.boundSnippet(selectedFolder); ok {
+
+		if !m.folderExpanded[selectedFolder] && m.folderTree.hasChildren(selectedFolder) {
 			m.folderExpanded[selectedFolder] = true
-			return m.updateFoldersForSelection(boundSnippetItem{
-				parent:  selectedFolder,
-				snippet: snippet,
-			}, true), true
+			return m.updateFoldersForSelection(selectedFolder, false), true
 		}
-		if child, ok := m.folderTree.firstChild(selectedFolder); ok {
-			m.folderExpanded[selectedFolder] = true
-			m.revealFolder(child)
+
+		if child, ok := m.folderTree.firstItem(selectedFolder); ok {
+			if folder, ok := child.(Folder); ok {
+				m.revealFolder(folder)
+			}
 			return m.updateFoldersForSelection(child, true), true
 		}
 
-		m.pane = snippetPane
+		m.pane = contentPane
 		return m.updateActivePane(msg), true
 	case "right":
-		if _, ok := selectedItem.(boundSnippetItem); ok {
+		if _, ok := selectedItem.(Snippet); ok {
 			return m.updateFoldersForSelection(selectedFolder, true), true
 		}
 		if m.folderExpanded[selectedFolder] && m.folderTree.hasChildren(selectedFolder) {
@@ -696,10 +717,10 @@ func (m *Model) updateFolderTreeNavigation(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return m.updateFoldersForSelection(parent, true), true
 		}
 
-		m.pane = snippetPane
+		m.pane = contentPane
 		return m.updateActivePane(msg), true
 	case "h":
-		if _, ok := selectedItem.(boundSnippetItem); ok {
+		if _, ok := selectedItem.(Snippet); ok {
 			return m.updateFoldersForSelection(selectedFolder, true), true
 		}
 		if m.folderExpanded[selectedFolder] && m.folderTree.hasChildren(selectedFolder) {
@@ -794,7 +815,7 @@ func (m *Model) paneWidths() (int, int) {
 	if m.isCollapsedPreview() {
 		return 0, 0
 	}
-	return expandedFolderPaneWidth, expandedSnippetPaneWidth
+	return expandedFolderPaneWidth, 0
 }
 
 func (m *Model) updatePaneLayout(totalWidth int) {
@@ -848,13 +869,6 @@ func (m *Model) foldersTitle() string {
 	return "Folders"
 }
 
-func (m *Model) snippetsTitle() string {
-	if m.isCollapsedPreview() {
-		return ""
-	}
-	return "Snippets"
-}
-
 func (m *Model) isCollapsedPreview() bool {
 	return m.pane == contentPane && m.state == navigatingState
 }
@@ -870,21 +884,32 @@ func (m *Model) contentHeader() string {
 		)
 	}
 
-	if m.isCollapsedPreview() {
-		return m.ContentStyle.Title.Render(m.selectedSnippet().String())
+	if m.state == deletingState {
+		if snippet, ok := m.selectedFolderItem().(Snippet); ok {
+			return m.ContentStyle.Title.Render(fmt.Sprintf("Delete %s? (y/N)", snippet.Name))
+		}
+		if folder, ok := m.folderDeletionTarget(); ok {
+			return m.ContentStyle.Title.Render(fmt.Sprintf("Delete %s? (y/N)", folderLabel(folder)))
+		}
+	}
+
+	if selected, ok := m.selectedFolderItem().(Snippet); ok {
+		if m.isCollapsedPreview() {
+			return m.ContentStyle.Title.Render(selected.String())
+		}
+		return lipgloss.JoinHorizontal(lipgloss.Left,
+			m.ContentStyle.Title.Render(selected.Folder),
+			m.ContentStyle.Separator.Render("/"),
+			m.ContentStyle.Title.Render(selected.Name),
+			m.ContentStyle.Separator.Render("."),
+			m.ContentStyle.Title.Render(selected.Language),
+		)
 	}
 
 	if len(m.List().Items()) == 0 {
 		return m.ContentStyle.Title.Render(string(m.selectedFolder()))
 	}
-
-	return lipgloss.JoinHorizontal(lipgloss.Left,
-		m.ContentStyle.Title.Render(m.selectedSnippet().Folder),
-		m.ContentStyle.Separator.Render("/"),
-		m.ContentStyle.Title.Render(m.selectedSnippet().Name),
-		m.ContentStyle.Separator.Render("."),
-		m.ContentStyle.Title.Render(m.selectedSnippet().Language),
-	)
+	return m.ContentStyle.Title.Render(string(m.selectedFolder()))
 }
 
 // displayError updates the content viewport with the error message provided.
@@ -944,14 +969,6 @@ func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 		m.updateKeyMap()
 		refreshContent = !sameTreeItem(previousItem, m.selectedFolderItem())
 		cmds = append(cmds, cmd)
-	case snippetPane:
-		previousSnippet := m.selectedSnippet().Path()
-		m.ListStyle = styles.Snippets.Focused
-		m.ContentStyle = styles.Content.Blurred
-		m.FoldersStyle = styles.Folders.Blurred
-		*m.List(), cmd = (*m.List()).Update(msg)
-		refreshContent = m.selectedSnippet().Path() != previousSnippet
-		cmds = append(cmds, cmd)
 	case contentPane:
 		m.ListStyle = styles.Snippets.Blurred
 		m.ContentStyle = styles.Content.Focused
@@ -965,12 +982,12 @@ func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 	compact := m.isCollapsedPreview()
 	m.List().SetDelegate(snippetDelegate{styles: m.ListStyle, state: m.state, compact: compact})
 	m.Folders.SetDelegate(folderDelegate{
-		styles:        m.FoldersStyle,
-		compact:       compact,
-		depths:        m.folderTree.depths,
-		expanded:      m.folderExpanded,
-		children:      m.folderTree.children,
-		boundSnippets: m.folderTree.boundSnippets,
+		styles:   m.FoldersStyle,
+		compact:  compact,
+		depths:   m.folderTree.depths,
+		expanded: m.folderExpanded,
+		children: m.folderTree.children,
+		snippets: m.folderTree.snippets,
 	})
 	m.Folders.Styles.TitleBar = m.FoldersStyle.TitleBar
 	m.Folders.Styles.Title = m.FoldersStyle.Title
@@ -987,19 +1004,28 @@ func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 // updateKeyMap disables or enables the keys based on the current state of the
 // snippet list.
 func (m *Model) updateKeyMap() {
-	hasItems := len(m.List().VisibleItems()) > 0
-	isFiltering := m.List().FilterState() == list.Filtering
+	selectedList, hasSelectedList := m.Lists[m.selectedFolder()]
+	hasFolderItems := len(m.Folders.VisibleItems()) > 0
+	isFiltering := hasSelectedList && selectedList.FilterState() == list.Filtering
 	isEditing := m.state == editingState
-	m.keys.DeleteSnippet.SetEnabled(hasItems && !isFiltering && !isEditing)
-	m.keys.CopySnippet.SetEnabled(hasItems && !isFiltering && !isEditing)
-	m.keys.PasteSnippet.SetEnabled(hasItems && !isFiltering && !isEditing)
-	m.keys.EditSnippet.SetEnabled(hasItems && !isFiltering && !isEditing)
+	_, snippetSelected := m.selectedFolderItem().(Snippet)
+	m.keys.DeleteSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing)
+	_, folderSelected := m.selectedFolderItem().(Folder)
+	m.keys.DeleteFolder.SetEnabled(m.pane == folderPane && folderSelected && hasFolderItems && !isEditing)
+	m.keys.CopySnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing)
+	m.keys.PasteSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing)
+	m.keys.EditSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing)
 	m.keys.NewSnippet.SetEnabled(!isFiltering && !isEditing)
+	m.keys.NewFolder.SetEnabled(m.pane == folderPane && !isEditing)
+	m.keys.NewRootFolder.SetEnabled(m.pane == folderPane && !isEditing)
 	m.keys.ChangeFolder.SetEnabled(m.pane == folderPane)
 }
 
 // selectedSnippet returns the currently selected snippet.
 func (m *Model) selectedSnippet() Snippet {
+	if snippet, ok := m.selectedFolderItem().(Snippet); ok {
+		return snippet
+	}
 	item := m.List().SelectedItem()
 	if item == nil {
 		return defaultSnippet
@@ -1031,22 +1057,6 @@ func (m *Model) List() *list.Model {
 	return m.Lists[folder]
 }
 
-func (m *Model) moveSnippetDown() {
-	currentPosition := m.List().Index()
-	currentItem := m.List().SelectedItem()
-	m.List().InsertItem(currentPosition+2, currentItem)
-	m.List().RemoveItem(currentPosition)
-	m.List().CursorDown()
-}
-
-func (m *Model) moveSnippetUp() {
-	currentPosition := m.List().Index()
-	currentItem := m.List().SelectedItem()
-	m.List().RemoveItem(currentPosition)
-	m.List().InsertItem(currentPosition-1, currentItem)
-	m.List().CursorUp()
-}
-
 // createNewSnippet creates a new snippet file and adds it to the the list.
 func (m *Model) createNewSnippetFile() tea.Cmd {
 	return func() tea.Msg {
@@ -1055,10 +1065,17 @@ func (m *Model) createNewSnippetFile() tea.Cmd {
 			folder = defaultSnippetFolder
 		}
 
-		file := fmt.Sprintf("snippet-%d.%s", rand.Intn(1000000), m.config.DefaultLanguage)
+		li, ok := m.Lists[Folder(folder)]
+		if !ok {
+			li = newList([]list.Item{}, m.height, m.ListStyle)
+			m.Lists[Folder(folder)] = li
+		}
+
+		name := nextIndexedMixedName(li.Items(), m.folderTree.children[Folder(folder)], defaultIndexedSnippetStem)
+		file := fmt.Sprintf("%s.%s", name, m.config.DefaultLanguage)
 
 		newSnippet := Snippet{
-			Name:     defaultSnippetName,
+			Name:     name,
 			Date:     time.Now(),
 			File:     file,
 			Language: m.config.DefaultLanguage,
@@ -1073,19 +1090,121 @@ func (m *Model) createNewSnippetFile() tea.Cmd {
 		_ = os.MkdirAll(filepath.Dir(path), os.ModePerm)
 		_, _ = os.Create(path)
 
-		m.List().InsertItem(m.List().Index(), newSnippet)
-		return changeStateMsg{navigatingState}
+		li.InsertItem(len(li.Items()), newSnippet)
+		sortSnippetList(li)
+		m.selectSnippetInFolder(Folder(folder), newSnippet)
+		m.state = navigatingState
+		m.updateKeyMap()
+		return m.updateFoldersForSelection(Folder(folder), true)()
+	}
+}
+
+func (m *Model) createNewFolder() tea.Cmd {
+	return m.createNewFolderAt(m.selectedFolder())
+}
+
+func (m *Model) createNewRootFolder() tea.Cmd {
+	return m.createNewFolderAt("")
+}
+
+func (m *Model) createNewFolderAt(parent Folder) tea.Cmd {
+	return func() tea.Msg {
+		var items []list.Item
+		if li, ok := m.Lists[parent]; ok {
+			items = li.Items()
+		}
+		children := m.folderTree.children[parent]
+		if parent == "" {
+			children = m.folderTree.roots
+		}
+		name := nextIndexedMixedName(items, children, defaultIndexedFolderStem)
+		folder := Folder(filepath.ToSlash(filepath.Join(string(parent), name)))
+		snippet := Snippet{
+			Name:     defaultIndexSnippetName,
+			Date:     time.Now(),
+			File:     defaultIndexSnippetName + "." + defaultIndexLanguage,
+			Language: defaultIndexLanguage,
+			Tags:     []string{},
+			Folder:   string(folder),
+		}
+
+		path, err := snippetStoragePath(m.config.Home, snippet)
+		if err != nil {
+			m.state = navigatingState
+			m.updateKeyMap()
+			return m.updateFoldersForSelection(m.selectedFolderItem(), true)()
+		}
+		_ = os.MkdirAll(filepath.Dir(path), os.ModePerm)
+		_ = os.WriteFile(path, []byte(defaultFolderIndexContent(folder)), 0o644)
+
+		m.Lists[folder] = newList([]list.Item{snippet}, m.height, m.ListStyle)
+		if m.folderExpanded == nil {
+			m.folderExpanded = map[Folder]bool{}
+		}
+		m.folderExpanded[folder] = true
+		m.state = navigatingState
+		m.updateKeyMap()
+		return m.updateFoldersForSelection(snippet, true)()
+	}
+}
+
+func (m *Model) deleteSelectedSnippet() tea.Cmd {
+	return func() tea.Msg {
+		snippet, ok := m.selectedFolderItem().(Snippet)
+		if !ok {
+			return m.updateFoldersForSelection(m.selectedFolderItem(), false)()
+		}
+		_ = os.Remove(m.selectedSnippetFilePath())
+		for idx, item := range m.List().Items() {
+			candidate, ok := item.(Snippet)
+			if ok && candidate.Path() == snippet.Path() {
+				m.List().RemoveItem(idx)
+				break
+			}
+		}
+		m.state = navigatingState
+		m.updateKeyMap()
+		return m.updateFoldersForSelection(m.selectedFolder(), true)()
+	}
+}
+
+func (m *Model) deleteSelectedFolder() tea.Cmd {
+	return func() tea.Msg {
+		target := m.selectedFolder()
+		var fallback list.Item
+		if parent, ok := parentFolder(target); ok {
+			fallback = parent
+		}
+
+		path, err := resolveHomePath(m.config.Home, string(target))
+		if err != nil {
+			m.state = navigatingState
+			m.updateKeyMap()
+			m.displayError(err.Error())
+			return m.updateFoldersForSelection(m.selectedFolderItem(), false)()
+		}
+
+		_ = os.RemoveAll(path)
+		for folder := range m.Lists {
+			if !isSameOrDescendantFolder(target, folder) {
+				continue
+			}
+			delete(m.Lists, folder)
+			delete(m.folderExpanded, folder)
+		}
+		delete(m.folderExpanded, target)
+		m.state = navigatingState
+		m.updateKeyMap()
+		return m.updateFoldersForSelection(fallback, true)()
 	}
 }
 
 func (m *Model) syncSelectedTreeSnippet() {
-	item := m.selectedFolderItem()
-	bound, ok := item.(boundSnippetItem)
+	snippet, ok := m.selectedFolderItem().(Snippet)
 	if !ok {
 		return
 	}
-
-	m.selectSnippetInFolder(bound.parent, bound.snippet)
+	m.selectSnippetInFolder(Folder(snippet.Folder), snippet)
 }
 
 func (m *Model) selectSnippetInFolder(folder Folder, target Snippet) {
@@ -1108,9 +1227,9 @@ func sameTreeItem(left, right list.Item) bool {
 	case Folder:
 		r, ok := right.(Folder)
 		return ok && l == r
-	case boundSnippetItem:
-		r, ok := right.(boundSnippetItem)
-		return ok && l.parent == r.parent && l.snippet.Path() == r.snippet.Path()
+	case Snippet:
+		r, ok := right.(Snippet)
+		return ok && l.Path() == r.Path()
 	default:
 		return left == nil && right == nil
 	}
@@ -1123,17 +1242,8 @@ func (m *Model) View() string {
 	}
 
 	var (
-		titleBar      = m.ListStyle.TitleBar.Render(m.snippetsTitle())
 		contentHeader = m.contentHeader()
 	)
-
-	if m.state == copyingState {
-		titleBar = m.ListStyle.CopiedTitleBar.Render("Copied Snippet!")
-	} else if m.state == deletingState {
-		titleBar = m.ListStyle.DeletedTitleBar.Render("Delete Snippet? (y/N)")
-	} else if m.List().SettingFilter() {
-		titleBar = m.ListStyle.TitleBar.Render(m.List().FilterInput.View())
-	}
 
 	contentBody := lipgloss.JoinHorizontal(lipgloss.Left,
 		m.ContentStyle.LineNumber.Render(m.LineNumbers.View()),
@@ -1154,7 +1264,6 @@ func (m *Model) View() string {
 		lipgloss.JoinHorizontal(
 			lipgloss.Left,
 			m.FoldersStyle.Base.Render(m.Folders.View()),
-			m.ListStyle.Base.Render(titleBar+m.List().View()),
 			lipgloss.JoinVertical(lipgloss.Top,
 				contentHeader,
 				contentBody,
@@ -1175,7 +1284,7 @@ func (m *Model) saveState() {
 	s := State{
 		CurrentFolder: string(m.selectedFolder()),
 	}
-	if len(m.List().Items()) > 0 {
+	if _, ok := m.selectedFolderItem().(Snippet); ok && len(m.List().Items()) > 0 {
 		s.CurrentSnippet = m.selectedSnippet().File
 	}
 	for folder, expanded := range m.folderExpanded {

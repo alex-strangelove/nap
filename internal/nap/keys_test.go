@@ -1,6 +1,7 @@
 package nap
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,35 +17,30 @@ import (
 func TestPaneNavigationUsesHLKeys(t *testing.T) {
 	m := newTestModel()
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	if m.pane != contentPane {
-		t.Fatalf("pane after pressing l is incorrect: got %v want %v", m.pane, contentPane)
+		t.Fatalf("pane after pressing tab is incorrect: got %v want %v", m.pane, contentPane)
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
-	if m.pane != snippetPane {
-		t.Fatalf("pane after pressing h is incorrect: got %v want %v", m.pane, snippetPane)
+	m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.pane != folderPane {
+		t.Fatalf("pane after pressing shift+tab is incorrect: got %v want %v", m.pane, folderPane)
 	}
 }
 
 func TestPaneNavigationStopsAtEdges(t *testing.T) {
 	m := newTestModel()
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	if m.pane != folderPane {
-		t.Fatalf("pane after pressing h from snippets is incorrect: got %v want %v", m.pane, folderPane)
+		t.Fatalf("pane after pressing shift+tab at left edge is incorrect: got %v want %v", m.pane, folderPane)
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
-	if m.pane != folderPane {
-		t.Fatalf("pane after pressing h at left edge is incorrect: got %v want %v", m.pane, folderPane)
-	}
-
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	if m.pane != contentPane {
-		t.Fatalf("pane after pressing l at right edge is incorrect: got %v want %v", m.pane, contentPane)
+		t.Fatalf("pane after pressing tab at right edge is incorrect: got %v want %v", m.pane, contentPane)
 	}
 }
 
@@ -55,13 +51,13 @@ func TestPreviewPaneCollapsesLeftColumns(t *testing.T) {
 	if m.Folders.Width() != expandedFolderPaneWidth {
 		t.Fatalf("folder width before preview is incorrect: got %d want %d", m.Folders.Width(), expandedFolderPaneWidth)
 	}
-	if m.List().Width() != expandedSnippetPaneWidth {
-		t.Fatalf("snippet width before preview is incorrect: got %d want %d", m.List().Width(), expandedSnippetPaneWidth)
+	if m.List().Width() != 0 {
+		t.Fatalf("snippet width before preview is incorrect: got %d want %d", m.List().Width(), 0)
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	if m.pane != contentPane {
-		t.Fatalf("pane after pressing l is incorrect: got %v want %v", m.pane, contentPane)
+		t.Fatalf("pane after pressing tab is incorrect: got %v want %v", m.pane, contentPane)
 	}
 	if m.Folders.Width() != 0 {
 		t.Fatalf("folder width in preview is incorrect: got %d want %d", m.Folders.Width(), 0)
@@ -73,11 +69,28 @@ func TestPreviewPaneCollapsesLeftColumns(t *testing.T) {
 		t.Fatalf("folder title in preview is incorrect: got %q want empty", m.Folders.Title)
 	}
 	view := m.View()
-	if !strings.Contains(view, defaultSnippet.String()) {
-		t.Fatalf("preview header does not contain snippet path %q", defaultSnippet.String())
+	if !strings.Contains(view, defaultSnippetFolder) {
+		t.Fatalf("preview header does not contain folder name %q", defaultSnippetFolder)
 	}
-	if strings.Contains(view, "Folders") || strings.Contains(view, "Snippets") {
+	if strings.Contains(view, "Folders") {
 		t.Fatalf("preview view still contains pane labels: %q", view)
+	}
+}
+
+func TestShortHelpIncludesDeleteSnippetAndRootFolderHintsWhenDisabled(t *testing.T) {
+	m := newTestModel()
+	m.help.Width = 200
+
+	if m.keys.DeleteSnippet.Enabled() {
+		t.Fatalf("delete snippet should be disabled when a folder is selected")
+	}
+
+	view := m.help.ShortHelpView(m.keys.ShortHelp())
+	if !strings.Contains(view, "x") || !strings.Contains(view, "del snippet") {
+		t.Fatalf("short help should display delete snippet hint, got %q", view)
+	}
+	if !strings.Contains(view, "O") || !strings.Contains(view, "new root folder") {
+		t.Fatalf("short help should display new root folder hint, got %q", view)
 	}
 }
 
@@ -93,8 +106,8 @@ func TestEditingMetadataKeepsExpandedLeftColumns(t *testing.T) {
 	if m.Folders.Width() != expandedFolderPaneWidth {
 		t.Fatalf("folder width while editing is incorrect: got %d want %d", m.Folders.Width(), expandedFolderPaneWidth)
 	}
-	if m.List().Width() != expandedSnippetPaneWidth {
-		t.Fatalf("snippet width while editing is incorrect: got %d want %d", m.List().Width(), expandedSnippetPaneWidth)
+	if m.List().Width() != 0 {
+		t.Fatalf("snippet width while editing is incorrect: got %d want %d", m.List().Width(), 0)
 	}
 	if m.Folders.Title != "Folders" {
 		t.Fatalf("folder title while editing is incorrect: got %q want %q", m.Folders.Title, "Folders")
@@ -112,11 +125,11 @@ func newTestModel() *Model {
 	tree := buildFolderTree(lists)
 	folderExpanded := map[Folder]bool{}
 	folderList := list.New([]list.Item{Folder(defaultSnippetFolder)}, folderDelegate{
-		styles:        styles.Folders.Blurred,
-		depths:        tree.depths,
-		expanded:      folderExpanded,
-		children:      tree.children,
-		boundSnippets: tree.boundSnippets,
+		styles:   styles.Folders.Blurred,
+		depths:   tree.depths,
+		expanded: folderExpanded,
+		children: tree.children,
+		snippets: tree.snippets,
 	}, 0, 0)
 	folderList.Select(0)
 
@@ -139,6 +152,7 @@ func newTestModel() *Model {
 			newTextInput(config.DefaultLanguage),
 		},
 		contentCache: map[contentCacheKey]contentCacheEntry{},
+		pane:         folderPane,
 	}
 	m.updateKeyMap()
 	return m
@@ -162,11 +176,11 @@ func newNestedFolderTestModel() *Model {
 	folderExpanded := map[Folder]bool{}
 	items := tree.visibleItems(folderExpanded)
 	folderList := list.New(items, folderDelegate{
-		styles:        styles.Folders.Blurred,
-		depths:        tree.depths,
-		expanded:      folderExpanded,
-		children:      tree.children,
-		boundSnippets: tree.boundSnippets,
+		styles:   styles.Folders.Blurred,
+		depths:   tree.depths,
+		expanded: folderExpanded,
+		children: tree.children,
+		snippets: tree.snippets,
 	}, 0, 0)
 	folderList.Select(0)
 
@@ -220,11 +234,11 @@ func newBoundIndexTestModel() *Model {
 	folderExpanded := map[Folder]bool{}
 	items := tree.visibleItems(folderExpanded)
 	folderList := list.New(items, folderDelegate{
-		styles:        styles.Folders.Blurred,
-		depths:        tree.depths,
-		expanded:      folderExpanded,
-		children:      tree.children,
-		boundSnippets: tree.boundSnippets,
+		styles:   styles.Folders.Blurred,
+		depths:   tree.depths,
+		expanded: folderExpanded,
+		children: tree.children,
+		snippets: tree.snippets,
 	}, 0, 0)
 	folderList.Select(0)
 
@@ -337,6 +351,35 @@ func TestContentPaneScrollSkipsFullPaneRefresh(t *testing.T) {
 	}
 }
 
+func TestFolderTreeLongLabelsAreEllipsized(t *testing.T) {
+	m := newTestModel()
+	delegate := folderDelegate{
+		styles:   m.FoldersStyle,
+		depths:   map[Folder]int{Folder("work"): 0},
+		expanded: map[Folder]bool{},
+		children: map[Folder][]Folder{},
+		snippets: map[Folder][]Snippet{},
+	}
+	model := list.New([]list.Item{
+		Snippet{
+			Name:     "this-is-a-very-long-snippet-name-that-should-be-truncated",
+			Folder:   "work",
+			File:     "this-is-a-very-long-snippet-name-that-should-be-truncated.md",
+			Language: "md",
+		},
+	}, delegate, 18, 1)
+
+	var out bytes.Buffer
+	delegate.Render(&out, model, 0, model.Items()[0])
+	rendered := out.String()
+	if !strings.Contains(rendered, "...") {
+		t.Fatalf("expected ellipsis in rendered tree label, got %q", rendered)
+	}
+	if strings.Contains(rendered, "\n") {
+		t.Fatalf("tree label should stay on one line, got %q", rendered)
+	}
+}
+
 func TestCreateNewSnippetFileCreatesNestedFolderPath(t *testing.T) {
 	tmp := t.TempDir()
 	m := newTestModel()
@@ -351,7 +394,7 @@ func TestCreateNewSnippetFileCreatesNestedFolderPath(t *testing.T) {
 		t.Fatalf("createNewSnippetFile returned nil")
 	}
 	msg := cmd()
-	if _, ok := msg.(changeStateMsg); !ok {
+	if _, ok := msg.(updateFoldersMsg); !ok {
 		t.Fatalf("unexpected createNewSnippetFile message type %T", msg)
 	}
 
@@ -360,6 +403,9 @@ func TestCreateNewSnippetFileCreatesNestedFolderPath(t *testing.T) {
 		t.Fatalf("expected one snippet in nested folder, got %d", len(items))
 	}
 	snippet := items[0].(Snippet)
+	if snippet.Name != "01-new-snippet" {
+		t.Fatalf("new snippet name mismatch: got %q want %q", snippet.Name, "01-new-snippet")
+	}
 	path, err := snippetStoragePath(tmp, snippet)
 	if err != nil {
 		t.Fatalf("could not resolve snippet path: %v", err)
@@ -369,7 +415,230 @@ func TestCreateNewSnippetFileCreatesNestedFolderPath(t *testing.T) {
 	}
 }
 
-func TestFolderPaneLeftExpandsAndDescendsTree(t *testing.T) {
+func TestCreateNewSnippetFileUsesNextIndex(t *testing.T) {
+	tmp := t.TempDir()
+	m := newBoundIndexTestModel()
+	m.config.Home = tmp
+	m.pane = snippetPane
+	if err := os.MkdirAll(filepath.Join(tmp, "work"), 0o755); err != nil {
+		t.Fatalf("could not create folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "work", "01-index.md"), []byte{}, 0o644); err != nil {
+		t.Fatalf("could not write index snippet: %v", err)
+	}
+
+	cmd := m.createNewSnippetFile()
+	if cmd == nil {
+		t.Fatalf("createNewSnippetFile returned nil")
+	}
+	msg := cmd()
+	update, ok := msg.(updateFoldersMsg)
+	if !ok {
+		t.Fatalf("unexpected createNewSnippetFile message type %T", msg)
+	}
+	if update.selectedFolderIndex != 0 {
+		t.Fatalf("selected folder index mismatch: got %d want 0", update.selectedFolderIndex)
+	}
+
+	items := m.Lists[Folder("work")].Items()
+	if len(items) != 2 {
+		t.Fatalf("expected two snippets in folder, got %d", len(items))
+	}
+	if got := items[1].(Snippet).Name; got != "02-new-snippet" {
+		t.Fatalf("new snippet name mismatch: got %q want %q", got, "02-new-snippet")
+	}
+}
+
+func TestCreateNewSnippetFileUsesNextIndexAcrossFoldersAndSnippets(t *testing.T) {
+	m := newBoundIndexTestModel()
+	m.pane = folderPane
+	m.Lists[Folder("work/02-tools")] = newList([]list.Item{
+		Snippet{
+			Name:     "01-index",
+			Folder:   "work/02-tools",
+			File:     "01-index.md",
+			Language: "md",
+		},
+	}, 20, m.ListStyle)
+
+	msg := m.updateFoldersView(Folder("work"), false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+
+	cmd := m.createNewSnippetFile()
+	if cmd == nil {
+		t.Fatalf("createNewSnippetFile returned nil")
+	}
+	if _, ok := cmd().(updateFoldersMsg); !ok {
+		t.Fatalf("unexpected createNewSnippetFile message type %T", cmd())
+	}
+
+	items := m.Lists[Folder("work")].Items()
+	if len(items) != 2 {
+		t.Fatalf("expected two snippets in folder, got %d", len(items))
+	}
+	if got := items[1].(Snippet).Name; got != "03-new-snippet" {
+		t.Fatalf("new snippet name mismatch: got %q want %q", got, "03-new-snippet")
+	}
+}
+
+func TestFolderPaneUppercaseNCreatesIndexedChildFolder(t *testing.T) {
+	tmp := t.TempDir()
+	m := newBoundIndexTestModel()
+	m.config.Home = tmp
+	m.pane = folderPane
+	m.folderExpanded[Folder("work")] = true
+
+	msg := m.updateFoldersView(Folder("work"), false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'N'}})
+	if cmd == nil {
+		t.Fatalf("expected folder creation command")
+	}
+
+	updated, _ = updated.(*Model).Update(cmd())
+
+	got := updated.(*Model)
+	item, ok := got.selectedFolderItem().(Snippet)
+	if !ok {
+		t.Fatalf("expected new folder index snippet selection, got %T", got.selectedFolderItem())
+	}
+	if item.Folder != "work/02-new-folder" {
+		t.Fatalf("new folder mismatch: got %q want %q", item.Folder, "work/02-new-folder")
+	}
+	path := filepath.Join(tmp, "work", "02-new-folder", "01-index.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("new folder index snippet was not created: %v", err)
+	}
+	if string(content) != "# New Folder\n" {
+		t.Fatalf("new folder index content mismatch: got %q want %q", string(content), "# New Folder\n")
+	}
+}
+
+func TestFolderPaneUppercaseOCreatesIndexedRootFolder(t *testing.T) {
+	tmp := t.TempDir()
+	m := newBoundIndexTestModel()
+	m.config.Home = tmp
+	m.pane = folderPane
+	m.folderExpanded[Folder("work")] = true
+
+	msg := m.updateFoldersView(Folder("work/tools"), false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	if cmd == nil {
+		t.Fatalf("expected root folder creation command")
+	}
+	updated, _ = updated.(*Model).Update(cmd())
+
+	got := updated.(*Model)
+	item, ok := got.selectedFolderItem().(Snippet)
+	if !ok {
+		t.Fatalf("expected root folder index snippet selection, got %T", got.selectedFolderItem())
+	}
+	if item.Folder != "01-new-folder" {
+		t.Fatalf("new root folder mismatch: got %q want %q", item.Folder, "01-new-folder")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "01-new-folder", "01-index.md")); err != nil {
+		t.Fatalf("root folder index snippet was not created: %v", err)
+	}
+}
+
+func TestFolderPaneUppercaseXDeletesSelectedFolderSubtree(t *testing.T) {
+	tmp := t.TempDir()
+	m := newBoundIndexTestModel()
+	m.config.Home = tmp
+	m.pane = folderPane
+	m.folderExpanded[Folder("work")] = true
+
+	for _, path := range []string{
+		filepath.Join(tmp, "work", "01-index.md"),
+		filepath.Join(tmp, "work", "tools", "01-index.md"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("could not create folder: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("# index\n"), 0o644); err != nil {
+			t.Fatalf("could not write snippet: %v", err)
+		}
+	}
+
+	msg := m.updateFoldersView(Folder("work/tools"), false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+	if m.selectedFolder() != Folder("work/tools") {
+		t.Fatalf("precondition selected folder mismatch: got %q want %q", m.selectedFolder(), Folder("work/tools"))
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	if cmd == nil {
+		t.Fatalf("expected delete confirmation state change")
+	}
+	updated, _ = updated.(*Model).Update(cmd())
+	got := updated.(*Model)
+	if got.pane != folderPane {
+		t.Fatalf("pane mismatch: got %v want %v", got.pane, folderPane)
+	}
+	if got.state != deletingState {
+		t.Fatalf("state mismatch: got %v want %v", got.state, deletingState)
+	}
+	if !strings.Contains(got.View(), "(y/N)") {
+		t.Fatalf("delete confirmation should be visible in the view")
+	}
+
+	deleteCmd := m.deleteSelectedFolder()
+	if deleteCmd == nil {
+		t.Fatalf("deleteSelectedFolder returned nil")
+	}
+	deleteMsg := deleteCmd()
+	update, ok := deleteMsg.(updateFoldersMsg)
+	if !ok {
+		t.Fatalf("unexpected deleteSelectedFolder message type %T", deleteMsg)
+	}
+	if update.selectedFolderIndex != 0 {
+		t.Fatalf("selected folder index mismatch: got %d want 0", update.selectedFolderIndex)
+	}
+	if _, exists := m.Lists[Folder("work/tools")]; exists {
+		t.Fatalf("deleted folder still exists in lists")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "work", "tools")); !os.IsNotExist(err) {
+		t.Fatalf("deleted folder still exists on disk: %v", err)
+	}
+}
+
+func TestSnippetDeletionPromptDisplaysConfirmation(t *testing.T) {
+	m := newBoundIndexTestModel()
+	m.folderExpanded[Folder("work")] = true
+
+	msg := m.updateFoldersView(Snippet{
+		Name:     "01-index",
+		Folder:   "work",
+		File:     "01-index.md",
+		Language: "md",
+	}, false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+	m.updateKeyMap()
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cmd == nil {
+		t.Fatalf("expected delete confirmation state change")
+	}
+	updated, _ = updated.(*Model).Update(cmd())
+	got := updated.(*Model)
+	if got.state != deletingState {
+		t.Fatalf("state mismatch: got %v want %v", got.state, deletingState)
+	}
+	if !strings.Contains(got.View(), "(y/N)") {
+		t.Fatalf("snippet delete confirmation should be visible in the view")
+	}
+}
+
+func TestFolderPaneLeftExpandsTreeBeforeDescending(t *testing.T) {
 	m := newNestedFolderTestModel()
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
@@ -379,8 +648,8 @@ func TestFolderPaneLeftExpandsAndDescendsTree(t *testing.T) {
 
 	updated, cmd = updated.(*Model).Update(cmd())
 	got := updated.(*Model)
-	if got.selectedFolder() != Folder("work/backend") {
-		t.Fatalf("selected folder mismatch: got %q want %q", got.selectedFolder(), Folder("work/backend"))
+	if got.selectedFolder() != Folder("work") {
+		t.Fatalf("selected folder mismatch: got %q want %q", got.selectedFolder(), Folder("work"))
 	}
 	if !got.folderExpanded[Folder("work")] {
 		t.Fatalf("expected parent folder to be expanded")
@@ -390,7 +659,7 @@ func TestFolderPaneLeftExpandsAndDescendsTree(t *testing.T) {
 	}
 }
 
-func TestFolderPaneLeftOnLeafMovesToSnippets(t *testing.T) {
+func TestFolderPaneLeftOnLeafExpandsToShowSnippetChildren(t *testing.T) {
 	m := newNestedFolderTestModel()
 	m.folderExpanded[Folder("work")] = true
 
@@ -400,17 +669,18 @@ func TestFolderPaneLeftOnLeafMovesToSnippets(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	got := updated.(*Model)
-	if got.pane != snippetPane {
-		t.Fatalf("pane mismatch: got %v want %v", got.pane, snippetPane)
+	if got.pane != folderPane {
+		t.Fatalf("pane mismatch: got %v want %v", got.pane, folderPane)
 	}
-	if cmd != nil {
-		if _, ok := cmd().(contentRenderedMsg); !ok {
-			t.Fatalf("unexpected follow-up message type %T", cmd())
-		}
+	if !got.folderExpanded[Folder("work/backend")] {
+		t.Fatalf("expected leaf folder with snippets to expand")
+	}
+	if cmd == nil {
+		t.Fatalf("expected folder expansion command")
 	}
 }
 
-func TestFolderPaneLExpandsAndDescendsTree(t *testing.T) {
+func TestFolderPaneLExpandsTreeBeforeDescending(t *testing.T) {
 	m := newNestedFolderTestModel()
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
@@ -420,11 +690,81 @@ func TestFolderPaneLExpandsAndDescendsTree(t *testing.T) {
 
 	updated, _ = updated.(*Model).Update(cmd())
 	got := updated.(*Model)
-	if got.selectedFolder() != Folder("work/backend") {
-		t.Fatalf("selected folder mismatch: got %q want %q", got.selectedFolder(), Folder("work/backend"))
+	if got.selectedFolder() != Folder("work") {
+		t.Fatalf("selected folder mismatch: got %q want %q", got.selectedFolder(), Folder("work"))
 	}
 	if !got.folderExpanded[Folder("work")] {
 		t.Fatalf("expected parent folder to be expanded")
+	}
+}
+
+func TestFolderPaneLeftOnExpandedFolderWithSnippetsSelectsFirstSnippet(t *testing.T) {
+	m := newBoundIndexTestModel()
+	m.pane = folderPane
+	m.folderExpanded[Folder("work")] = true
+
+	msg := m.updateFoldersView(Folder("work"), false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if cmd == nil {
+		t.Fatalf("expected tree selection command")
+	}
+	updated, _ = updated.(*Model).Update(cmd())
+	got := updated.(*Model)
+	snippet, ok := got.selectedFolderItem().(Snippet)
+	if !ok {
+		t.Fatalf("expected snippet selection, got %T", got.selectedFolderItem())
+	}
+	if snippet.Folder != "work" || snippet.Name != "01-index" {
+		t.Fatalf("selected snippet mismatch: got %q/%q want %q/%q", snippet.Folder, snippet.Name, "work", "01-index")
+	}
+}
+
+func TestFolderPaneLowercaseNCreatesSnippetInSelectedRootFolder(t *testing.T) {
+	tmp := t.TempDir()
+	m := newBoundIndexTestModel()
+	m.config.Home = tmp
+	m.pane = folderPane
+	m.folderExpanded[Folder("work")] = true
+	if err := os.MkdirAll(filepath.Join(tmp, "work"), 0o755); err != nil {
+		t.Fatalf("could not create folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "work", "01-index.md"), []byte{}, 0o644); err != nil {
+		t.Fatalf("could not write root index snippet: %v", err)
+	}
+
+	msg := m.updateFoldersView(Folder("work"), false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if cmd == nil {
+		t.Fatalf("expected snippet creation command")
+	}
+	if _, ok := cmd().(updateFoldersMsg); !ok {
+		t.Fatalf("unexpected snippet creation message type %T", cmd())
+	}
+
+	got := updated.(*Model)
+	items := got.Lists[Folder("work")].Items()
+	if len(items) != 2 {
+		t.Fatalf("expected two snippets in root folder, got %d", len(items))
+	}
+	if gotName := items[1].(Snippet).Name; gotName != "02-new-snippet" {
+		t.Fatalf("new root snippet mismatch: got %q want %q", gotName, "02-new-snippet")
+	}
+	if gotFolder := items[1].(Snippet).Folder; gotFolder != "work" {
+		t.Fatalf("new root snippet folder mismatch: got %q want %q", gotFolder, "work")
+	}
+
+	msg = got.updateFoldersView(Folder("work"), false).(updateFoldersMsg)
+	if len(msg.items) != 4 {
+		t.Fatalf("visible tree item count mismatch: got %d want 4", len(msg.items))
+	}
+	if snippet, ok := msg.items[2].(Snippet); !ok || snippet.Name != "02-new-snippet" {
+		t.Fatalf("expected new snippet in tree at index 2, got %T %v", msg.items[2], msg.items[2])
 	}
 }
 
@@ -463,7 +803,7 @@ func TestFolderPaneHStopsAtRoot(t *testing.T) {
 	}
 }
 
-func TestFolderTreeShowsBoundSnippetBeforeChildFolder(t *testing.T) {
+func TestFolderTreeShowsSnippetsBeforeChildFolder(t *testing.T) {
 	m := newBoundIndexTestModel()
 	m.folderExpanded[Folder("work")] = true
 
@@ -472,11 +812,65 @@ func TestFolderTreeShowsBoundSnippetBeforeChildFolder(t *testing.T) {
 	if len(items) != 3 {
 		t.Fatalf("visible item count mismatch: got %d want 3", len(items))
 	}
-	if _, ok := items[1].(boundSnippetItem); !ok {
-		t.Fatalf("expected bound snippet item at index 1, got %T", items[1])
+	if snippet, ok := items[1].(Snippet); !ok || snippet.Name != "01-index" {
+		t.Fatalf("expected snippet item at index 1, got %T %v", items[1], items[1])
 	}
 	if child, ok := items[2].(Folder); !ok || child != Folder("work/tools") {
 		t.Fatalf("expected child folder at index 2, got %T %v", items[2], items[2])
+	}
+}
+
+func TestFolderTreeUsesSharedMixedIndexOrder(t *testing.T) {
+	m := newBoundIndexTestModel()
+	delete(m.Lists, Folder("work/tools"))
+	m.Lists[Folder("work")] = newList([]list.Item{
+		Snippet{
+			Name:     "01-index",
+			Folder:   "work",
+			File:     "01-index.md",
+			Language: "md",
+		},
+		Snippet{
+			Name:     "03-new-snippet",
+			Folder:   "work",
+			File:     "03-new-snippet.md",
+			Language: "md",
+		},
+	}, 20, m.ListStyle)
+	m.Lists[Folder("work/02-clangd")] = newList([]list.Item{
+		Snippet{
+			Name:     "01-index",
+			Folder:   "work/02-clangd",
+			File:     "01-index.md",
+			Language: "md",
+		},
+	}, 20, m.ListStyle)
+	m.Lists[Folder("work/04-new-folder")] = newList([]list.Item{
+		Snippet{
+			Name:     "01-index",
+			Folder:   "work/04-new-folder",
+			File:     "01-index.md",
+			Language: "md",
+		},
+	}, 20, m.ListStyle)
+	m.folderExpanded[Folder("work")] = true
+
+	msg := m.updateFoldersView(Folder("work"), false).(updateFoldersMsg)
+	items := msg.items
+	if len(items) != 5 {
+		t.Fatalf("visible item count mismatch: got %d want 5", len(items))
+	}
+	if snippet, ok := items[1].(Snippet); !ok || snippet.Name != "01-index" {
+		t.Fatalf("expected 01-index at index 1, got %T %v", items[1], items[1])
+	}
+	if child, ok := items[2].(Folder); !ok || child != Folder("work/02-clangd") {
+		t.Fatalf("expected 02-clangd at index 2, got %T %v", items[2], items[2])
+	}
+	if snippet, ok := items[3].(Snippet); !ok || snippet.Name != "03-new-snippet" {
+		t.Fatalf("expected 03-new-snippet at index 3, got %T %v", items[3], items[3])
+	}
+	if child, ok := items[4].(Folder); !ok || child != Folder("work/04-new-folder") {
+		t.Fatalf("expected 04-new-folder at index 4, got %T %v", items[4], items[4])
 	}
 }
 
@@ -490,11 +884,11 @@ func TestNestedFolderWithOnlyIndexShowsExpandableChild(t *testing.T) {
 
 	item := m.Folders.SelectedItem()
 	delegate := folderDelegate{
-		styles:        m.FoldersStyle,
-		depths:        m.folderTree.depths,
-		expanded:      m.folderExpanded,
-		children:      m.folderTree.children,
-		boundSnippets: m.folderTree.boundSnippets,
+		styles:   m.FoldersStyle,
+		depths:   m.folderTree.depths,
+		expanded: m.folderExpanded,
+		children: m.folderTree.children,
+		snippets: m.folderTree.snippets,
 	}
 	label := delegate.itemLabel(item)
 	if !strings.Contains(label, "▸ ") {
@@ -502,37 +896,33 @@ func TestNestedFolderWithOnlyIndexShowsExpandableChild(t *testing.T) {
 	}
 }
 
-func TestFolderPaneLeftSelectsBoundSnippetBeforeChildFolder(t *testing.T) {
+func TestFolderPaneLeftExpandsFolderBeforeSelectingChildren(t *testing.T) {
 	m := newBoundIndexTestModel()
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if cmd == nil {
-		t.Fatalf("expected folder tree selection command")
+		t.Fatalf("expected folder tree expansion command")
 	}
 
 	updated, _ = updated.(*Model).Update(cmd())
 	got := updated.(*Model)
-	item, ok := got.selectedFolderItem().(boundSnippetItem)
-	if !ok {
-		t.Fatalf("expected bound snippet item selection, got %T", got.selectedFolderItem())
+	if _, ok := got.selectedFolderItem().(Folder); !ok {
+		t.Fatalf("expected folder selection after expansion, got %T", got.selectedFolderItem())
 	}
-	if item.snippet.Name != "01-index" {
-		t.Fatalf("unexpected bound snippet selected: got %q", item.snippet.Name)
+	if got.selectedFolder() != Folder("work") {
+		t.Fatalf("selected folder mismatch: got %q want %q", got.selectedFolder(), Folder("work"))
 	}
 }
 
-func TestBoundSnippetTreeItemEntersSnippetPane(t *testing.T) {
+func TestSnippetTreeItemEntersContentPane(t *testing.T) {
 	m := newBoundIndexTestModel()
 	m.folderExpanded[Folder("work")] = true
 
-	msg := m.updateFoldersView(boundSnippetItem{
-		parent: Folder("work"),
-		snippet: Snippet{
-			Name:     "01-index",
-			Folder:   "work",
-			File:     "01-index.md",
-			Language: "md",
-		},
+	msg := m.updateFoldersView(Snippet{
+		Name:     "01-index",
+		Folder:   "work",
+		File:     "01-index.md",
+		Language: "md",
 	}, false).(updateFoldersMsg)
 	m.Folders.SetItems(msg.items)
 	m.Folders.Select(msg.selectedFolderIndex)
@@ -540,8 +930,8 @@ func TestBoundSnippetTreeItemEntersSnippetPane(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	got := updated.(*Model)
-	if got.pane != snippetPane {
-		t.Fatalf("pane mismatch: got %v want %v", got.pane, snippetPane)
+	if got.pane != contentPane {
+		t.Fatalf("pane mismatch: got %v want %v", got.pane, contentPane)
 	}
 	if got.selectedSnippet().Name != "01-index" {
 		t.Fatalf("selected snippet mismatch: got %q want %q", got.selectedSnippet().Name, "01-index")
@@ -553,7 +943,7 @@ func TestBoundSnippetTreeItemEntersSnippetPane(t *testing.T) {
 	}
 }
 
-func TestLeafFolderWithBoundIndexSelectsBoundSnippetFirst(t *testing.T) {
+func TestLeafFolderWithIndexExpandsThenSelectsSnippet(t *testing.T) {
 	m := newBoundIndexTestModel()
 	m.folderExpanded[Folder("work")] = true
 
@@ -563,32 +953,38 @@ func TestLeafFolderWithBoundIndexSelectsBoundSnippetFirst(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
 	if cmd == nil {
-		t.Fatalf("expected bound snippet selection command")
+		t.Fatalf("expected folder expansion command")
 	}
-
 	updated, _ = updated.(*Model).Update(cmd())
 	got := updated.(*Model)
-	item, ok := got.selectedFolderItem().(boundSnippetItem)
-	if !ok {
-		t.Fatalf("expected bound snippet item selection, got %T", got.selectedFolderItem())
+	if got.pane != folderPane {
+		t.Fatalf("pane mismatch after expansion: got %v want %v", got.pane, folderPane)
 	}
-	if item.parent != Folder("work/tools") {
-		t.Fatalf("bound snippet parent mismatch: got %q want %q", item.parent, Folder("work/tools"))
+
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if cmd == nil {
+		t.Fatalf("expected snippet selection command")
+	}
+	updated, _ = updated.(*Model).Update(cmd())
+	got = updated.(*Model)
+	snippet, ok := got.selectedFolderItem().(Snippet)
+	if !ok {
+		t.Fatalf("expected snippet selection, got %T", got.selectedFolderItem())
+	}
+	if snippet.Folder != "work/tools" || snippet.Name != "01-index" {
+		t.Fatalf("selected snippet mismatch: got %q/%q want %q/%q", snippet.Folder, snippet.Name, "work/tools", "01-index")
 	}
 }
 
-func TestBoundSnippetTreeItemHReturnsToParentFolder(t *testing.T) {
+func TestSnippetTreeItemHReturnsToParentFolder(t *testing.T) {
 	m := newBoundIndexTestModel()
 	m.folderExpanded[Folder("work")] = true
 
-	msg := m.updateFoldersView(boundSnippetItem{
-		parent: Folder("work"),
-		snippet: Snippet{
-			Name:     "01-index",
-			Folder:   "work",
-			File:     "01-index.md",
-			Language: "md",
-		},
+	msg := m.updateFoldersView(Snippet{
+		Name:     "01-index",
+		Folder:   "work",
+		File:     "01-index.md",
+		Language: "md",
 	}, false).(updateFoldersMsg)
 	m.Folders.SetItems(msg.items)
 	m.Folders.Select(msg.selectedFolderIndex)

@@ -9,20 +9,11 @@ import (
 )
 
 type folderTree struct {
-	roots         []Folder
-	children      map[Folder][]Folder
-	parents       map[Folder]Folder
-	depths        map[Folder]int
-	boundSnippets map[Folder]Snippet
-}
-
-type boundSnippetItem struct {
-	parent  Folder
-	snippet Snippet
-}
-
-func (b boundSnippetItem) FilterValue() string {
-	return string(b.parent)
+	roots    []Folder
+	children map[Folder][]Folder
+	parents  map[Folder]Folder
+	depths   map[Folder]int
+	snippets map[Folder][]Snippet
 }
 
 func ensureAncestorLists(lists map[Folder]*list.Model, height int, styles SnippetsBaseStyle) {
@@ -56,10 +47,10 @@ func ensureAncestorLists(lists map[Folder]*list.Model, height int, styles Snippe
 
 func buildFolderTree(lists map[Folder]*list.Model) folderTree {
 	tree := folderTree{
-		children:      make(map[Folder][]Folder),
-		parents:       make(map[Folder]Folder),
-		depths:        make(map[Folder]int),
-		boundSnippets: make(map[Folder]Snippet),
+		children: make(map[Folder][]Folder),
+		parents:  make(map[Folder]Folder),
+		depths:   make(map[Folder]int),
+		snippets: make(map[Folder][]Snippet),
 	}
 
 	folders := make([]Folder, 0, len(lists))
@@ -67,13 +58,20 @@ func buildFolderTree(lists map[Folder]*list.Model) folderTree {
 		folders = append(folders, folder)
 	}
 
-	slices.Sort(folders)
+	slices.SortFunc(folders, func(left, right Folder) int {
+		return compareIndexedLabels(filepath.Base(string(left)), filepath.Base(string(right)))
+	})
 
 	for _, folder := range folders {
 		tree.depths[folder] = strings.Count(string(folder), "/")
-		if snippet, ok := boundIndexSnippet(lists[folder]); ok {
-			tree.boundSnippets[folder] = snippet
+		for _, item := range lists[folder].Items() {
+			snippet, ok := item.(Snippet)
+			if !ok {
+				continue
+			}
+			tree.snippets[folder] = append(tree.snippets[folder], snippet)
 		}
+		sortSnippets(tree.snippets[folder])
 
 		parent, ok := parentFolder(folder)
 		if !ok {
@@ -86,7 +84,9 @@ func buildFolderTree(lists map[Folder]*list.Model) folderTree {
 	}
 
 	for parent := range tree.children {
-		slices.Sort(tree.children[parent])
+		slices.SortFunc(tree.children[parent], func(left, right Folder) int {
+			return compareIndexedLabels(filepath.Base(string(left)), filepath.Base(string(right)))
+		})
 	}
 
 	return tree
@@ -122,15 +122,13 @@ func (t folderTree) visibleItems(expanded map[Folder]bool) []list.Item {
 			return
 		}
 
-		if snippet, ok := t.boundSnippet(folder); ok {
-			items = append(items, boundSnippetItem{
-				parent:  folder,
-				snippet: snippet,
-			})
-		}
-
-		for _, child := range t.children[folder] {
-			walk(child)
+		for _, child := range t.orderedChildren(folder) {
+			switch v := child.(type) {
+			case Snippet:
+				items = append(items, v)
+			case Folder:
+				walk(v)
+			}
 		}
 	}
 
@@ -141,18 +139,13 @@ func (t folderTree) visibleItems(expanded map[Folder]bool) []list.Item {
 	return items
 }
 
-func (t folderTree) firstChild(folder Folder) (Folder, bool) {
-	children := t.children[folder]
+func (t folderTree) firstItem(folder Folder) (list.Item, bool) {
+	children := t.orderedChildren(folder)
 	if len(children) == 0 {
-		return "", false
+		return nil, false
 	}
 
 	return children[0], true
-}
-
-func (t folderTree) boundSnippet(folder Folder) (Snippet, bool) {
-	snippet, ok := t.boundSnippets[folder]
-	return snippet, ok
 }
 
 func (t folderTree) parent(folder Folder) (Folder, bool) {
@@ -161,12 +154,32 @@ func (t folderTree) parent(folder Folder) (Folder, bool) {
 }
 
 func (t folderTree) hasChildren(folder Folder) bool {
-	return len(t.children[folder]) > 0 || t.hasBoundSnippet(folder)
+	return len(t.children[folder]) > 0 || len(t.snippets[folder]) > 0
 }
 
-func (t folderTree) hasBoundSnippet(folder Folder) bool {
-	_, ok := t.boundSnippets[folder]
-	return ok
+func (t folderTree) orderedChildren(folder Folder) []list.Item {
+	items := make([]list.Item, 0, len(t.snippets[folder])+len(t.children[folder]))
+	for _, snippet := range t.snippets[folder] {
+		items = append(items, snippet)
+	}
+	for _, child := range t.children[folder] {
+		items = append(items, child)
+	}
+	slices.SortFunc(items, func(left, right list.Item) int {
+		return compareIndexedLabels(treeItemLabel(left), treeItemLabel(right))
+	})
+	return items
+}
+
+func treeItemLabel(item list.Item) string {
+	switch v := item.(type) {
+	case Snippet:
+		return v.Name
+	case Folder:
+		return filepath.Base(string(v))
+	default:
+		return ""
+	}
 }
 
 func visibleFolderIndex(items []list.Item, target list.Item, parents map[Folder]Folder) int {
@@ -181,8 +194,8 @@ func visibleFolderIndex(items []list.Item, target list.Item, parents map[Folder]
 				if folder, ok := target.(Folder); ok && candidate == folder {
 					return idx
 				}
-			case boundSnippetItem:
-				if snippet, ok := target.(boundSnippetItem); ok && candidate.parent == snippet.parent && candidate.snippet.Path() == snippet.snippet.Path() {
+			case Snippet:
+				if snippet, ok := target.(Snippet); ok && candidate.Path() == snippet.Path() {
 					return idx
 				}
 			}
@@ -209,30 +222,23 @@ func treeItemFolder(item list.Item) Folder {
 	switch v := item.(type) {
 	case Folder:
 		return v
-	case boundSnippetItem:
-		return v.parent
+	case Snippet:
+		return Folder(v.Folder)
 	default:
 		return ""
 	}
 }
 
-func boundIndexSnippet(li *list.Model) (Snippet, bool) {
-	if li == nil {
-		return Snippet{}, false
+func isSameOrDescendantFolder(folder, candidate Folder) bool {
+	if folder == "" || candidate == "" {
+		return false
 	}
 
-	for _, item := range li.Items() {
-		snippet, ok := item.(Snippet)
-		if !ok {
-			continue
-		}
-
-		if isIndexSnippet(snippet) {
-			return snippet, true
-		}
+	if folder == candidate {
+		return true
 	}
 
-	return Snippet{}, false
+	return strings.HasPrefix(string(candidate), string(folder)+"/")
 }
 
 func isIndexSnippet(snippet Snippet) bool {

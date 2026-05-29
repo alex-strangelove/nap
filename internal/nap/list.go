@@ -96,12 +96,12 @@ func (f Folder) FilterValue() string {
 
 // folderDelegate represents a folder list item.
 type folderDelegate struct {
-	styles        FoldersBaseStyle
-	compact       bool
-	depths        map[Folder]int
-	expanded      map[Folder]bool
-	children      map[Folder][]Folder
-	boundSnippets map[Folder]Snippet
+	styles   FoldersBaseStyle
+	compact  bool
+	depths   map[Folder]int
+	expanded map[Folder]bool
+	children map[Folder][]Folder
+	snippets map[Folder][]Snippet
 }
 
 // Height is the number of lines the folder list item takes up.
@@ -126,6 +126,7 @@ func (d folderDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	if label == "" {
 		return
 	}
+	label = truncate.Truncate(label, treeTitleWidth(m.Width()), "...", truncate.PositionEnd)
 	if d.compact {
 		titleWidth := compactTitleWidth(m.Width())
 		label = truncate.Truncate(label, titleWidth, "...", truncate.PositionEnd)
@@ -148,10 +149,10 @@ func (d folderDelegate) itemLabel(item list.Item) string {
 	switch v := item.(type) {
 	case Folder:
 		depth := d.depths[v]
-		return strings.Repeat("  ", depth) + folderIndicator(d.children, d.boundSnippets, d.expanded, v) + folderLabel(v)
-	case boundSnippetItem:
-		depth := d.depths[v.parent] + 1
-		return strings.Repeat("  ", depth) + "• " + v.snippet.Name
+		return strings.Repeat("  ", depth) + folderIndicator(d.children, d.snippets, d.expanded, v) + folderLabel(v)
+	case Snippet:
+		depth := d.depths[Folder(v.Folder)] + 1
+		return strings.Repeat("  ", depth) + "• " + v.Name
 	default:
 		return ""
 	}
@@ -185,10 +186,17 @@ func humanizeTime(t time.Time) string {
 }
 
 func compactTitleWidth(width int) int {
-	if width <= 4 {
-		return 1
+	if width <= 7 {
+		return 4
 	}
 	return width - 4
+}
+
+func treeTitleWidth(width int) int {
+	if width <= 9 {
+		return 4
+	}
+	return width - 6
 }
 
 func folderLabel(folder Folder) string {
@@ -199,11 +207,9 @@ func folderLabel(folder Folder) string {
 	return value
 }
 
-func folderIndicator(children map[Folder][]Folder, boundSnippets map[Folder]Snippet, expanded map[Folder]bool, folder Folder) string {
-	if len(children[folder]) == 0 {
-		if _, ok := boundSnippets[folder]; !ok {
-			return "• "
-		}
+func folderIndicator(children map[Folder][]Folder, snippets map[Folder][]Snippet, expanded map[Folder]bool, folder Folder) string {
+	if len(children[folder]) == 0 && len(snippets[folder]) == 0 {
+		return "• "
 	}
 	if expanded[folder] {
 		return "▾ "

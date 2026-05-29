@@ -336,6 +336,8 @@ func saveSnippet(content string, args []string, config Config, snippets []Snippe
 }
 
 func writeSnippets(config Config, snippets []Snippet) {
+	snippets = append([]Snippet(nil), snippets...)
+	sortSnippets(snippets)
 	b, err := json.Marshal(snippets)
 	if err != nil {
 		fmt.Println("Could not marshal latest snippet data.", err)
@@ -398,11 +400,11 @@ func runInteractiveMode(config Config, snippets []Snippet) error {
 
 	folderItems := tree.visibleItems(folderExpanded)
 	folderList := list.New(folderItems, folderDelegate{
-		styles:        defaultStyles.Folders.Blurred,
-		depths:        tree.depths,
-		expanded:      folderExpanded,
-		children:      tree.children,
-		boundSnippets: tree.boundSnippets,
+		styles:   defaultStyles.Folders.Blurred,
+		depths:   tree.depths,
+		expanded: folderExpanded,
+		children: tree.children,
+		snippets: tree.snippets,
 	}, 0, 0)
 	folderList.Title = "Folders"
 
@@ -412,7 +414,15 @@ func runInteractiveMode(config Config, snippets []Snippet) error {
 	folderList.DisableQuitKeybindings()
 	folderList.Styles.NoItems = lipgloss.NewStyle().Margin(0, 2).Foreground(lipgloss.Color(config.GrayColor))
 	folderList.SetStatusBarItemName("folder", "folders")
-	folderList.Select(visibleFolderIndex(folderItems, currentFolder, tree.parents))
+	currentItem := list.Item(currentFolder)
+	for _, item := range lists[currentFolder].Items() {
+		snippet, ok := item.(Snippet)
+		if ok && snippet.File == state.CurrentSnippet {
+			currentItem = snippet
+			break
+		}
+	}
+	folderList.Select(visibleFolderIndex(folderItems, currentItem, tree.parents))
 
 	content := viewport.New(80, 0)
 
@@ -448,6 +458,7 @@ func runInteractiveMode(config Config, snippets []Snippet) error {
 		},
 		tagsInput:    newTextInput("Tags"),
 		contentCache: map[contentCacheKey]contentCacheEntry{},
+		pane:         folderPane,
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	model, err := p.Run()
@@ -474,6 +485,8 @@ func runInteractiveMode(config Config, snippets []Snippet) error {
 }
 
 func newList(items []list.Item, height int, styles SnippetsBaseStyle) *list.Model {
+	items = append([]list.Item(nil), items...)
+	sortSnippetItems(items)
 	snippetList := list.New(items, snippetDelegate{styles: styles, state: navigatingState}, 25, height)
 	snippetList.SetShowHelp(false)
 	snippetList.SetShowFilter(false)
