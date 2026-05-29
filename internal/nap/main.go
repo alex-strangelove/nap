@@ -363,6 +363,40 @@ func findSnippet(search string, snippets []Snippet) Snippet {
 	return Snippet{}
 }
 
+func initialInteractiveSelection(state State, lists map[Folder]*list.Model, tree folderTree) (Folder, list.Item) {
+	currentFolder := Folder(defaultSnippetFolder)
+	if state.CurrentFolder != "" {
+		candidate := Folder(state.CurrentFolder)
+		if _, ok := lists[candidate]; ok {
+			currentFolder = candidate
+		}
+	}
+
+	if _, ok := lists[currentFolder]; !ok {
+		if len(tree.roots) > 0 {
+			currentFolder = tree.roots[0]
+		} else {
+			for folder := range lists {
+				currentFolder = folder
+				break
+			}
+		}
+	}
+
+	currentItem := list.Item(currentFolder)
+	if snippetList, ok := lists[currentFolder]; ok {
+		for _, item := range snippetList.Items() {
+			snippet, ok := item.(Snippet)
+			if ok && snippet.File == state.CurrentSnippet {
+				currentItem = snippet
+				break
+			}
+		}
+	}
+
+	return currentFolder, currentItem
+}
+
 func runInteractiveMode(config Config, snippets []Snippet) error {
 	if len(snippets) == 0 {
 		// welcome to nap!
@@ -388,12 +422,7 @@ func runInteractiveMode(config Config, snippets []Snippet) error {
 	}
 
 	tree := buildFolderTree(lists)
-	currentFolder := Folder(defaultSnippetFolder)
-	if state.CurrentFolder != "" {
-		if _, ok := lists[Folder(state.CurrentFolder)]; ok {
-			currentFolder = Folder(state.CurrentFolder)
-		}
-	}
+	currentFolder, currentItem := initialInteractiveSelection(state, lists, tree)
 	for _, ancestor := range ancestorFolders(currentFolder) {
 		folderExpanded[ancestor] = true
 	}
@@ -414,14 +443,6 @@ func runInteractiveMode(config Config, snippets []Snippet) error {
 	folderList.DisableQuitKeybindings()
 	folderList.Styles.NoItems = lipgloss.NewStyle().Margin(0, 2).Foreground(lipgloss.Color(config.GrayColor))
 	folderList.SetStatusBarItemName("folder", "folders")
-	currentItem := list.Item(currentFolder)
-	for _, item := range lists[currentFolder].Items() {
-		snippet, ok := item.(Snippet)
-		if ok && snippet.File == state.CurrentSnippet {
-			currentItem = snippet
-			break
-		}
-	}
 	folderList.Select(visibleFolderIndex(folderItems, currentItem, tree.parents))
 
 	content := viewport.New(80, 0)

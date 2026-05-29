@@ -42,7 +42,10 @@ func defaultState() string {
 func readState() State {
 	var s State
 	fi, err := os.Open(defaultState())
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if errors.Is(err, fs.ErrNotExist) {
+		return s
+	}
+	if err != nil {
 		return s
 	}
 	defer fi.Close()

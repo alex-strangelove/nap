@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/charmbracelet/bubbles/list"
 )
 
 func TestParseNameSupportsNestedFolders(t *testing.T) {
@@ -163,6 +165,61 @@ func TestSaveSnippetRejectsPathTraversal(t *testing.T) {
 	snippets := readSnippets(cfg)
 	if len(snippets) != 0 {
 		t.Fatalf("expected no snippets to be saved for invalid path, got %d", len(snippets))
+	}
+}
+
+func TestInitialInteractiveSelectionFallsBackToExistingRoot(t *testing.T) {
+	config := newConfig()
+	styles := DefaultStyles(config)
+	lists := map[Folder]*list.Model{
+		Folder("work/backend"): newList([]list.Item{
+			Snippet{
+				Name:     "handler",
+				Folder:   "work/backend",
+				File:     "handler.go",
+				Language: "go",
+			},
+		}, 20, styles.Snippets.Focused),
+	}
+
+	ensureAncestorLists(lists, 20, styles.Snippets.Focused)
+	tree := buildFolderTree(lists)
+
+	currentFolder, currentItem := initialInteractiveSelection(State{}, lists, tree)
+	if currentFolder != Folder("work") {
+		t.Fatalf("current folder mismatch: got %q want %q", currentFolder, Folder("work"))
+	}
+	if folder, ok := currentItem.(Folder); !ok || folder != Folder("work") {
+		t.Fatalf("current item mismatch: got %#v want folder %q", currentItem, Folder("work"))
+	}
+}
+
+func TestInitialInteractiveSelectionUsesStoredSnippetWhenAvailable(t *testing.T) {
+	config := newConfig()
+	styles := DefaultStyles(config)
+	lists := map[Folder]*list.Model{
+		Folder("work"): newList([]list.Item{
+			Snippet{
+				Name:     "handler",
+				Folder:   "work",
+				File:     "handler.go",
+				Language: "go",
+			},
+		}, 20, styles.Snippets.Focused),
+	}
+
+	tree := buildFolderTree(lists)
+
+	currentFolder, currentItem := initialInteractiveSelection(State{
+		CurrentFolder:  "work",
+		CurrentSnippet: "handler.go",
+	}, lists, tree)
+	if currentFolder != Folder("work") {
+		t.Fatalf("current folder mismatch: got %q want %q", currentFolder, Folder("work"))
+	}
+	snippet, ok := currentItem.(Snippet)
+	if !ok || snippet.File != "handler.go" {
+		t.Fatalf("current item mismatch: got %#v want snippet %q", currentItem, "handler.go")
 	}
 }
 
