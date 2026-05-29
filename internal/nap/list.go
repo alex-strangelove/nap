@@ -41,14 +41,8 @@ func (d snippetDelegate) Spacing() int {
 }
 
 // Update is called when the list is updated.
-// We use this to update the snippet code view.
 func (d snippetDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
-	return func() tea.Msg {
-		if m.SelectedItem() == nil {
-			return nil
-		}
-		return updateContentMsg(m.SelectedItem().(Snippet))
-	}
+	return nil
 }
 
 // Render renders the list item for the snippet which includes the title,

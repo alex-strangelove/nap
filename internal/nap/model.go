@@ -95,32 +95,168 @@ type Model struct {
 	ListStyle    SnippetsBaseStyle
 	FoldersStyle FoldersBaseStyle
 	ContentStyle ContentBaseStyle
+	contentCache map[contentCacheKey]contentCacheEntry
 }
 
 // Init initialzes the application model.
 func (m *Model) Init() tea.Cmd {
 	rand.Seed(time.Now().Unix())
+	if m.contentCache == nil {
+		m.contentCache = map[contentCacheKey]contentCacheEntry{}
+	}
 
 	m.Folders.Styles.Title = m.FoldersStyle.Title
 	m.Folders.Styles.TitleBar = m.FoldersStyle.TitleBar
 	m.updateKeyMap()
 
-	return func() tea.Msg {
-		return updateContentMsg(m.selectedSnippet())
+	return m.updateContent()
+}
+
+type contentCacheKey struct {
+	path     string
+	width    int
+	theme    string
+	markdown bool
+}
+
+type contentCacheEntry struct {
+	modTimeUnixNano int64
+	size            int64
+	rendered        string
+	lineCount       int
+}
+
+type contentRenderedMsg struct {
+	snippet           Snippet
+	width             int
+	rendered          string
+	lineCount         int
+	showCreateHint    bool
+	showNoContentHint bool
+	err               error
+	previewerMissing  bool
+	cacheKey          contentCacheKey
+	modTimeUnixNano   int64
+	size              int64
+}
+
+type refreshContentMsg struct{}
+
+func (m *Model) contentKey(snippet Snippet, width int) contentCacheKey {
+	return contentCacheKey{
+		path:     snippet.Path(),
+		width:    width,
+		theme:    m.config.Theme,
+		markdown: isMarkdownLanguage(snippet.Language),
 	}
 }
 
-// updateContentMsg tells the application to update the content view with the
-// given snippet.
-type updateContentMsg Snippet
+func (m *Model) contentWidth(snippet Snippet) int {
+	if isMarkdownLanguage(snippet.Language) {
+		return m.previewWidth()
+	}
+	return 0
+}
+
+func (m *Model) cachedContent(snippet Snippet, width int) (contentRenderedMsg, bool) {
+	if m.contentCache == nil {
+		return contentRenderedMsg{}, false
+	}
+
+	info, err := os.Stat(filepath.Join(m.config.Home, snippet.Path()))
+	if err != nil || info.IsDir() {
+		return contentRenderedMsg{}, false
+	}
+
+	key := m.contentKey(snippet, width)
+	entry, ok := m.contentCache[key]
+	if !ok {
+		return contentRenderedMsg{}, false
+	}
+
+	modTimeUnixNano := info.ModTime().UnixNano()
+	if entry.modTimeUnixNano != modTimeUnixNano || entry.size != info.Size() {
+		return contentRenderedMsg{}, false
+	}
+
+	return contentRenderedMsg{
+		snippet:         snippet,
+		width:           width,
+		rendered:        entry.rendered,
+		lineCount:       entry.lineCount,
+		cacheKey:        key,
+		modTimeUnixNano: entry.modTimeUnixNano,
+		size:            entry.size,
+	}, true
+}
+
+func renderContent(config Config, snippet Snippet, width int, key contentCacheKey) tea.Msg {
+	path := filepath.Join(config.Home, snippet.Path())
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return contentRenderedMsg{snippet: snippet, width: width, showNoContentHint: true}
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil || len(content) == 0 {
+		return contentRenderedMsg{snippet: snippet, width: width, showNoContentHint: true}
+	}
+
+	msg := contentRenderedMsg{
+		snippet:         snippet,
+		width:           width,
+		cacheKey:        key,
+		modTimeUnixNano: info.ModTime().UnixNano(),
+		size:            info.Size(),
+	}
+
+	if isMarkdownLanguage(snippet.Language) {
+		rendered, err := previewContent(string(content), width)
+		if err != nil {
+			msg.err = err
+			msg.previewerMissing = err == errPreviewerNotFound
+			return msg
+		}
+		msg.rendered = rendered
+		msg.lineCount = lipgloss.Height(rendered)
+		return msg
+	}
+
+	var b bytes.Buffer
+	err = quick.Highlight(&b, string(content), snippet.Language, "terminal16m", config.Theme)
+	if err != nil {
+		msg.err = fmt.Errorf("Unable to highlight file.")
+		return msg
+	}
+
+	msg.rendered = b.String()
+	msg.lineCount = lipgloss.Height(msg.rendered)
+	return msg
+}
 
 // updateContent instructs the application to fetch the latest contents of the
 // snippet file.
 //
 // This is useful after a Paste or Edit.
 func (m *Model) updateContent() tea.Cmd {
+	if len(m.List().Items()) <= 0 {
+		return func() tea.Msg {
+			return contentRenderedMsg{showCreateHint: true}
+		}
+	}
+
+	snippet := m.selectedSnippet()
+	width := m.contentWidth(snippet)
+	if msg, ok := m.cachedContent(snippet, width); ok {
+		return func() tea.Msg {
+			return msg
+		}
+	}
+
+	config := m.config
+	key := m.contentKey(snippet, width)
 	return func() tea.Msg {
-		return updateContentMsg(m.selectedSnippet())
+		return renderContent(config, snippet, width, key)
 	}
 }
 
@@ -157,8 +293,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.Folders, cmd = m.Folders.Update(msg)
 		return m, tea.Batch(setItemsCmd, cmd)
-	case updateContentMsg:
-		return m.updateContentView(msg)
+	case contentRenderedMsg:
+		return m.applyContentView(msg)
+	case refreshContentMsg:
+		return m, m.updateContent()
 	case changeStateMsg:
 		m.List().SetDelegate(snippetDelegate{styles: m.ListStyle, state: msg.newState, compact: m.isCollapsedPreview()})
 
@@ -274,9 +412,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.List().RemoveItem(m.List().Index())
 				m.state = navigatingState
 				m.updateKeyMap()
-				return m, tea.Batch(changeState(navigatingState), func() tea.Msg {
-					return updateContentMsg(m.selectedSnippet())
-				})
+				return m, tea.Batch(changeState(navigatingState), m.updateContent())
 			case key.Matches(msg, m.keys.Quit, m.keys.Cancel):
 				return m, changeState(navigatingState)
 			}
@@ -359,6 +495,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Search):
 			m.pane = snippetPane
 		}
+	case tea.MouseMsg:
+		if cmd, ok := m.updateContentScroll(msg); ok {
+			return m, cmd
+		}
+	}
+
+	if cmd, ok := m.updateContentScroll(msg); ok {
+		return m, cmd
 	}
 
 	m.updateKeyMap()
@@ -402,7 +546,7 @@ func (m *Model) previousPane() {
 // editSnippet opens the editor with the selected snippet file path.
 func (m *Model) editSnippet() tea.Cmd {
 	return tea.ExecProcess(editorCmd(m.selectedSnippetFilePath()), func(err error) tea.Msg {
-		return updateContentMsg(m.selectedSnippet())
+		return refreshContentMsg{}
 	})
 }
 
@@ -456,9 +600,16 @@ func (m *Model) updateFoldersView() tea.Msg {
 	}
 }
 
-// updateContentView updates the content view with the correct content based on
-// the active snippet or display the appropriate error message / hint message.
-func (m *Model) updateContentView(msg updateContentMsg) (tea.Model, tea.Cmd) {
+// applyContentView updates the content viewport with the rendered content or
+// appropriate hints.
+func (m *Model) applyContentView(msg contentRenderedMsg) (tea.Model, tea.Cmd) {
+	if msg.showCreateHint {
+		m.displayKeyHint([]keyHint{
+			{m.keys.NewSnippet, "create a new snippet."},
+		})
+		return m, nil
+	}
+
 	if len(m.List().Items()) <= 0 {
 		m.displayKeyHint([]keyHint{
 			{m.keys.NewSnippet, "create a new snippet."},
@@ -466,43 +617,36 @@ func (m *Model) updateContentView(msg updateContentMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	var b bytes.Buffer
-	content, err := os.ReadFile(filepath.Join(m.config.Home, Snippet(msg).Path()))
-	if err != nil {
+	if msg.snippet.Path() != m.selectedSnippet().Path() || msg.width != m.contentWidth(m.selectedSnippet()) {
+		return m, nil
+	}
+
+	if msg.showNoContentHint {
 		m.displayKeyHint(m.noContentHints())
 		return m, nil
 	}
 
-	if string(content) == "" {
-		m.displayKeyHint(m.noContentHints())
-		return m, nil
-	}
-
-	if isMarkdownLanguage(msg.Language) {
-		rendered, err := previewContent(string(content), m.previewWidth())
-		if err != nil {
-			if err == errPreviewerNotFound {
-				m.displayError("Install glow to preview Markdown snippets.")
-			} else {
-				m.displayError(err.Error())
-			}
-			return m, nil
+	if msg.err != nil {
+		if msg.previewerMissing {
+			m.displayError("Install glow to preview Markdown snippets.")
+		} else {
+			m.displayError(msg.err.Error())
 		}
-		m.writeLineNumbers(lipgloss.Height(rendered))
-		m.Code.SetContent(rendered)
 		return m, nil
 	}
 
-	// b.WriteString(string(content))
-	err = quick.Highlight(&b, string(content), msg.Language, "terminal16m", m.config.Theme)
-	if err != nil {
-		m.displayError("Unable to highlight file.")
-		return m, nil
+	if m.contentCache == nil {
+		m.contentCache = map[contentCacheKey]contentCacheEntry{}
+	}
+	m.contentCache[msg.cacheKey] = contentCacheEntry{
+		modTimeUnixNano: msg.modTimeUnixNano,
+		size:            msg.size,
+		rendered:        msg.rendered,
+		lineCount:       msg.lineCount,
 	}
 
-	s := b.String()
-	m.writeLineNumbers(lipgloss.Height(s))
-	m.Code.SetContent(s)
+	m.writeLineNumbers(msg.lineCount)
+	m.Code.SetContent(msg.rendered)
 	return m, nil
 }
 
@@ -626,9 +770,11 @@ func (m *Model) contentHeader() string {
 // displayError updates the content viewport with the error message provided.
 func (m *Model) displayError(error string) {
 	m.LineNumbers.SetContent(" ~ ")
+	m.LineNumbers.SetYOffset(0)
 	m.Code.SetContent(fmt.Sprintf("%s",
 		m.ContentStyle.EmptyHint.Render(error),
 	))
+	m.Code.SetYOffset(0)
 }
 
 // writeLineNumbers writes the number of line numbers to the line number
@@ -639,6 +785,23 @@ func (m *Model) writeLineNumbers(n int) {
 		lineNumbers.WriteString(fmt.Sprintf("%3d \n", i))
 	}
 	m.LineNumbers.SetContent(lineNumbers.String() + "  ~ \n")
+	m.LineNumbers.SetYOffset(m.Code.YOffset)
+}
+
+func (m *Model) updateContentScroll(msg tea.Msg) (tea.Cmd, bool) {
+	if m.pane != contentPane || m.state != navigatingState {
+		return nil, false
+	}
+
+	previousOffset := m.Code.YOffset
+	var cmd tea.Cmd
+	m.Code, cmd = m.Code.Update(msg)
+	if m.Code.YOffset == previousOffset {
+		return nil, false
+	}
+
+	m.LineNumbers.SetYOffset(m.Code.YOffset)
+	return cmd, true
 }
 
 const tabSpaces = 4
@@ -648,24 +811,30 @@ func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
 	previousCodeWidth := m.Code.Width
+	refreshContent := false
+	styles := DefaultStyles(m.config)
 	switch m.pane {
 	case folderPane:
-		m.ListStyle = DefaultStyles(m.config).Snippets.Blurred
-		m.ContentStyle = DefaultStyles(m.config).Content.Blurred
-		m.FoldersStyle = DefaultStyles(m.config).Folders.Focused
+		previousFolder := m.selectedFolder()
+		m.ListStyle = styles.Snippets.Blurred
+		m.ContentStyle = styles.Content.Blurred
+		m.FoldersStyle = styles.Folders.Focused
 		m.Folders, cmd = m.Folders.Update(msg)
 		m.updateKeyMap()
-		cmds = append(cmds, cmd, m.updateContent())
+		refreshContent = m.selectedFolder() != previousFolder
+		cmds = append(cmds, cmd)
 	case snippetPane:
-		m.ListStyle = DefaultStyles(m.config).Snippets.Focused
-		m.ContentStyle = DefaultStyles(m.config).Content.Blurred
-		m.FoldersStyle = DefaultStyles(m.config).Folders.Blurred
+		previousSnippet := m.selectedSnippet().Path()
+		m.ListStyle = styles.Snippets.Focused
+		m.ContentStyle = styles.Content.Blurred
+		m.FoldersStyle = styles.Folders.Blurred
 		*m.List(), cmd = (*m.List()).Update(msg)
+		refreshContent = m.selectedSnippet().Path() != previousSnippet
 		cmds = append(cmds, cmd)
 	case contentPane:
-		m.ListStyle = DefaultStyles(m.config).Snippets.Blurred
-		m.ContentStyle = DefaultStyles(m.config).Content.Focused
-		m.FoldersStyle = DefaultStyles(m.config).Folders.Blurred
+		m.ListStyle = styles.Snippets.Blurred
+		m.ContentStyle = styles.Content.Focused
+		m.FoldersStyle = styles.Folders.Blurred
 		m.Code, cmd = m.Code.Update(msg)
 		cmds = append(cmds, cmd)
 		m.LineNumbers, cmd = m.LineNumbers.Update(msg)
@@ -678,6 +847,9 @@ func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 	m.Folders.Styles.TitleBar = m.FoldersStyle.TitleBar
 	m.Folders.Styles.Title = m.FoldersStyle.Title
 	if m.Code.Width != previousCodeWidth {
+		refreshContent = true
+	}
+	if refreshContent {
 		cmds = append(cmds, m.updateContent())
 	}
 

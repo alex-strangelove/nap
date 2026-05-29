@@ -1,6 +1,8 @@
 package nap
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -110,7 +112,92 @@ func newTestModel() *Model {
 			newTextInput(defaultSnippetName + " "),
 			newTextInput(config.DefaultLanguage),
 		},
+		contentCache: map[contentCacheKey]contentCacheEntry{},
 	}
 	m.updateKeyMap()
 	return m
+}
+
+func TestSnippetDelegateUpdateDoesNotRefreshContent(t *testing.T) {
+	delegate := snippetDelegate{}
+	model := list.New([]list.Item{defaultSnippet}, delegate, 0, 0)
+
+	if cmd := delegate.Update(tea.KeyMsg{Type: tea.KeyDown}, &model); cmd != nil {
+		t.Fatalf("snippet delegate should not force content refresh commands")
+	}
+}
+
+func TestUpdateContentUsesCachedRenderForMarkdown(t *testing.T) {
+	tmp := t.TempDir()
+	content := "# title\n\ncontent"
+	snippet := Snippet{
+		Name:     "preview",
+		Folder:   defaultSnippetFolder,
+		File:     "preview.md",
+		Language: "md",
+	}
+	snippetPath := filepath.Join(tmp, snippet.Path())
+	if err := os.MkdirAll(filepath.Dir(snippetPath), os.ModePerm); err != nil {
+		t.Fatalf("could not create snippet dir: %v", err)
+	}
+	if err := os.WriteFile(snippetPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("could not write snippet: %v", err)
+	}
+
+	m := newTestModel()
+	m.config.Home = tmp
+	m.Lists[Folder(defaultSnippetFolder)].SetItem(0, snippet)
+	m.Code.Width = 40
+
+	info, err := os.Stat(snippetPath)
+	if err != nil {
+		t.Fatalf("could not stat snippet: %v", err)
+	}
+	width := m.contentWidth(snippet)
+	key := m.contentKey(snippet, width)
+	m.contentCache[key] = contentCacheEntry{
+		modTimeUnixNano: info.ModTime().UnixNano(),
+		size:            info.Size(),
+		rendered:        "cached preview",
+		lineCount:       2,
+	}
+
+	cmd := m.updateContent()
+	if cmd == nil {
+		t.Fatalf("updateContent returned nil")
+	}
+
+	msg, ok := cmd().(contentRenderedMsg)
+	if !ok {
+		t.Fatalf("updateContent returned unexpected message type %T", cmd())
+	}
+	if msg.rendered != "cached preview" {
+		t.Fatalf("cached preview content mismatch: got %q", msg.rendered)
+	}
+	if msg.width != width {
+		t.Fatalf("cached preview width mismatch: got %d want %d", msg.width, width)
+	}
+}
+
+func TestContentPaneScrollSkipsFullPaneRefresh(t *testing.T) {
+	m := newTestModel()
+	m.pane = contentPane
+	m.state = navigatingState
+	m.Code.Height = 3
+	m.LineNumbers.Height = 3
+	m.Code.SetContent("one\ntwo\nthree\nfour\nfive")
+	m.writeLineNumbers(5)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if cmd != nil {
+		t.Fatalf("expected no extra command while scrolling content pane")
+	}
+
+	got := updated.(*Model)
+	if got.Code.YOffset != 1 {
+		t.Fatalf("code viewport offset mismatch: got %d want 1", got.Code.YOffset)
+	}
+	if got.LineNumbers.YOffset != 1 {
+		t.Fatalf("line number viewport offset mismatch: got %d want 1", got.LineNumbers.YOffset)
+	}
 }
