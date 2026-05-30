@@ -44,11 +44,14 @@ type SnippetsBaseStyle struct {
 // FoldersBaseStyle holds the neccessary styling for the folders pane of
 // the application.
 type FoldersBaseStyle struct {
-	Base       lipgloss.Style
-	Title      lipgloss.Style
-	TitleBar   lipgloss.Style
-	Selected   lipgloss.Style
-	Unselected lipgloss.Style
+	Base              lipgloss.Style
+	Title             lipgloss.Style
+	TitleBar          lipgloss.Style
+	Selected          lipgloss.Style
+	Unselected        lipgloss.Style
+	FlashcardPending  lipgloss.Style
+	FlashcardPositive lipgloss.Style
+	FlashcardNegative lipgloss.Style
 }
 
 // ContentBaseStyle holds the neccessary styling for the content pane of the
@@ -119,18 +122,24 @@ func DefaultStyles(config Config) Styles {
 		},
 		Folders: FoldersStyle{
 			Focused: FoldersBaseStyle{
-				Base:       lipgloss.NewStyle().Width(22).Background(black),
-				Title:      lipgloss.NewStyle().Padding(0, 1).Foreground(white),
-				TitleBar:   lipgloss.NewStyle().Background(blue).Width(22),
-				Selected:   lipgloss.NewStyle().Foreground(brightBlue),
-				Unselected: lipgloss.NewStyle().Foreground(gray),
+				Base:              lipgloss.NewStyle().Width(22).Background(black),
+				Title:             lipgloss.NewStyle().Padding(0, 1).Foreground(white),
+				TitleBar:          lipgloss.NewStyle().Background(blue).Width(22),
+				Selected:          lipgloss.NewStyle().Foreground(brightBlue),
+				Unselected:        lipgloss.NewStyle().Foreground(gray),
+				FlashcardPending:  lipgloss.NewStyle().Foreground(brightBlack),
+				FlashcardPositive: lipgloss.NewStyle().Foreground(brightGreen),
+				FlashcardNegative: lipgloss.NewStyle().Foreground(brightRed),
 			},
 			Blurred: FoldersBaseStyle{
-				Base:       lipgloss.NewStyle().Width(22).Background(black),
-				Title:      lipgloss.NewStyle().Padding(0, 1).Foreground(gray),
-				TitleBar:   lipgloss.NewStyle().Background(black).Width(22),
-				Selected:   lipgloss.NewStyle().Foreground(brightBlue),
-				Unselected: lipgloss.NewStyle().Foreground(lipgloss.Color("237")),
+				Base:              lipgloss.NewStyle().Width(22).Background(black),
+				Title:             lipgloss.NewStyle().Padding(0, 1).Foreground(gray),
+				TitleBar:          lipgloss.NewStyle().Background(black).Width(22),
+				Selected:          lipgloss.NewStyle().Foreground(brightBlue),
+				Unselected:        lipgloss.NewStyle().Foreground(lipgloss.Color("237")),
+				FlashcardPending:  lipgloss.NewStyle().Foreground(brightBlack),
+				FlashcardPositive: lipgloss.NewStyle().Foreground(green),
+				FlashcardNegative: lipgloss.NewStyle().Foreground(red),
 			},
 		},
 		Content: ContentStyle{

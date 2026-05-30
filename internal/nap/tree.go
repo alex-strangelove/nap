@@ -9,11 +9,12 @@ import (
 )
 
 type folderTree struct {
-	roots    []Folder
-	children map[Folder][]Folder
-	parents  map[Folder]Folder
-	depths   map[Folder]int
-	snippets map[Folder][]Snippet
+	roots      []Folder
+	children   map[Folder][]Folder
+	parents    map[Folder]Folder
+	depths     map[Folder]int
+	snippets   map[Folder][]Snippet
+	flashcards map[Folder][]Snippet
 }
 
 func ensureAncestorLists(lists map[Folder]*list.Model, height int, styles SnippetsBaseStyle) {
@@ -47,10 +48,11 @@ func ensureAncestorLists(lists map[Folder]*list.Model, height int, styles Snippe
 
 func buildFolderTree(lists map[Folder]*list.Model) folderTree {
 	tree := folderTree{
-		children: make(map[Folder][]Folder),
-		parents:  make(map[Folder]Folder),
-		depths:   make(map[Folder]int),
-		snippets: make(map[Folder][]Snippet),
+		children:   make(map[Folder][]Folder),
+		parents:    make(map[Folder]Folder),
+		depths:     make(map[Folder]int),
+		snippets:   make(map[Folder][]Snippet),
+		flashcards: make(map[Folder][]Snippet),
 	}
 
 	folders := make([]Folder, 0, len(lists))
@@ -69,9 +71,15 @@ func buildFolderTree(lists map[Folder]*list.Model) folderTree {
 			if !ok {
 				continue
 			}
+			if isHiddenFlashcardDeck(snippet) {
+				tree.flashcards[folder] = append(tree.flashcards[folder], snippet)
+				continue
+			}
+
 			tree.snippets[folder] = append(tree.snippets[folder], snippet)
 		}
 		sortSnippets(tree.snippets[folder])
+		sortSnippets(tree.flashcards[folder])
 
 		parent, ok := parentFolder(folder)
 		if !ok {

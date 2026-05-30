@@ -9,6 +9,7 @@ import (
 	"github.com/aquilax/truncate"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/dustin/go-humanize"
 )
 
@@ -98,12 +99,13 @@ func (f Folder) FilterValue() string {
 
 // folderDelegate represents a folder list item.
 type folderDelegate struct {
-	styles   FoldersBaseStyle
-	compact  bool
-	depths   map[Folder]int
-	expanded map[Folder]bool
-	children map[Folder][]Folder
-	snippets map[Folder][]Snippet
+	styles     FoldersBaseStyle
+	compact    bool
+	depths     map[Folder]int
+	expanded   map[Folder]bool
+	children   map[Folder][]Folder
+	snippets   map[Folder][]Snippet
+	flashcards map[Folder][]Snippet
 }
 
 // Height is the number of lines the folder list item takes up.
@@ -128,8 +130,8 @@ func (d folderDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	if label == "" {
 		return
 	}
-	label = truncate.Truncate(label, treeTitleWidth(m.Width()), "...", truncate.PositionEnd)
 	if d.compact {
+		label = truncate.Truncate(label, treeTitleWidth(m.Width()), "...", truncate.PositionEnd)
 		titleWidth := compactTitleWidth(m.Width())
 		label = truncate.Truncate(label, titleWidth, "...", truncate.PositionEnd)
 		if index == m.Index() {
@@ -139,12 +141,36 @@ func (d folderDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		fmt.Fprint(w, " "+d.styles.Unselected.Render(" "+label))
 		return
 	}
-	fmt.Fprint(w, "  ")
+
+	status := d.itemStatus(item)
+	labelWidth := treeTitleWidth(m.Width())
+	if status != "" {
+		labelWidth -= lipgloss.Width(status) + 1
+	}
+	if labelWidth < 1 {
+		labelWidth = 1
+	}
+	label = truncate.Truncate(label, labelWidth, "...", truncate.PositionEnd)
+
+	style := d.styles.Unselected
+	prefix := "  "
 	if index == m.Index() {
-		fmt.Fprint(w, d.styles.Selected.Render("→ "+label))
+		style = d.styles.Selected
+		prefix = "→ "
+	}
+
+	fmt.Fprint(w, "  ")
+	fmt.Fprint(w, style.Render(prefix+label))
+	if status == "" {
 		return
 	}
-	fmt.Fprint(w, d.styles.Unselected.Render("  "+label))
+
+	gapWidth := treeTitleWidth(m.Width()) - lipgloss.Width(label) - lipgloss.Width(status)
+	if gapWidth < 1 {
+		gapWidth = 1
+	}
+	fmt.Fprint(w, strings.Repeat(" ", gapWidth))
+	fmt.Fprint(w, status)
 }
 
 func (d folderDelegate) itemLabel(item list.Item) string {
@@ -158,6 +184,30 @@ func (d folderDelegate) itemLabel(item list.Item) string {
 	default:
 		return ""
 	}
+}
+
+func (d folderDelegate) itemStatus(item list.Item) string {
+	folder, ok := item.(Folder)
+	if !ok {
+		return ""
+	}
+
+	states := descendantFlashcardStates(d.children, d.flashcards, folder)
+	if len(states) == 0 {
+		return ""
+	}
+
+	dots := make([]string, 0, len(states))
+	for _, state := range states {
+		switch state {
+		case flashcardDeckPositive:
+			dots = append(dots, d.styles.FlashcardPositive.Render("●"))
+		case flashcardDeckNegative:
+			dots = append(dots, d.styles.FlashcardNegative.Render("●"))
+		}
+	}
+
+	return strings.Join(dots, " ")
 }
 
 const (
@@ -231,4 +281,29 @@ func folderIndicator(children map[Folder][]Folder, snippets map[Folder][]Snippet
 		return "▾ "
 	}
 	return "▸ "
+}
+
+func descendantFlashcardStates(children map[Folder][]Folder, flashcards map[Folder][]Snippet, folder Folder) []flashcardDeckState {
+	states := make([]flashcardDeckState, 0, len(flashcards[folder]))
+
+	var walk func(Folder)
+	walk = func(current Folder) {
+		for _, snippet := range flashcards[current] {
+			state, ok := flashcardDeckStateForSnippet(snippet)
+			if !ok {
+				continue
+			}
+			if state == flashcardDeckPending {
+				continue
+			}
+			states = append(states, state)
+		}
+
+		for _, child := range children[current] {
+			walk(child)
+		}
+	}
+
+	walk(folder)
+	return states
 }

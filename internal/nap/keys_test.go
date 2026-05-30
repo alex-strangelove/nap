@@ -106,7 +106,7 @@ func TestFlashcardHintsHiddenWhenFeatureDisabled(t *testing.T) {
 	}
 }
 
-func TestFlashcardHintsShownWhenFeatureEnabled(t *testing.T) {
+func TestFlashcardShortHelpOnlyShowsEnabledActions(t *testing.T) {
 	m := newTestModel()
 	m.config.FlashcardsEnabled = true
 	m.updateKeyMap()
@@ -116,8 +116,8 @@ func TestFlashcardHintsShownWhenFeatureEnabled(t *testing.T) {
 	if !strings.Contains(view, "f") || !strings.Contains(view, "new cards") {
 		t.Fatalf("flashcard create hint missing from short help, got %q", view)
 	}
-	if !strings.Contains(view, "F") || !strings.Contains(view, "review cards") {
-		t.Fatalf("flashcard review hint missing from short help, got %q", view)
+	if strings.Contains(view, "review cards") || strings.Contains(view, "reset cards") {
+		t.Fatalf("short help should hide disabled flashcard actions, got %q", view)
 	}
 }
 
@@ -131,6 +131,51 @@ func TestReviewFlashcardsDisabledWithoutDeck(t *testing.T) {
 	}
 	if m.keys.ReviewFlashcards.Enabled() {
 		t.Fatal("review flashcards key should be disabled without a deck")
+	}
+	if m.keys.ResetFlashcards.Enabled() {
+		t.Fatal("reset flashcards key should be disabled without an answered deck")
+	}
+}
+
+func TestMixedFlashcardDecksEnableReviewAndReset(t *testing.T) {
+	m := newTestModel()
+	m.config.FlashcardsEnabled = true
+	folder := Folder(defaultSnippetFolder)
+	m.Lists[folder] = newList([]list.Item{
+		Snippet{Name: "00-cards", Folder: defaultSnippetFolder, File: "00-cards.txt", Language: "txt"},
+		Snippet{Name: "00-cards+", Folder: defaultSnippetFolder, File: "00-cards+.txt", Language: "txt"},
+	}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{folder})
+	m.Folders.Select(0)
+	m.updateKeyMap()
+
+	if !m.keys.ReviewFlashcards.Enabled() {
+		t.Fatal("review flashcards key should stay enabled when pending and answered decks coexist")
+	}
+	if !m.keys.ResetFlashcards.Enabled() {
+		t.Fatal("reset flashcards key should be enabled when answered decks exist")
+	}
+}
+
+func TestShortHelpShowsResetForMixedFlashcardDecks(t *testing.T) {
+	m := newTestModel()
+	m.config.FlashcardsEnabled = true
+	folder := Folder(defaultSnippetFolder)
+	m.Lists[folder] = newList([]list.Item{
+		Snippet{Name: "00-cards", Folder: defaultSnippetFolder, File: "00-cards.txt", Language: "txt"},
+		Snippet{Name: "00-cards+", Folder: defaultSnippetFolder, File: "00-cards+.txt", Language: "txt"},
+	}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{folder})
+	m.Folders.Select(0)
+	m.updateKeyMap()
+	m.help.Width = 200
+
+	view := m.help.ShortHelpView(m.keys.ShortHelp())
+	if !strings.Contains(view, "F") || !strings.Contains(view, "review cards") {
+		t.Fatalf("review hint missing from short help, got %q", view)
+	}
+	if !strings.Contains(view, "z") || !strings.Contains(view, "reset cards") {
+		t.Fatalf("reset hint missing from short help, got %q", view)
 	}
 }
 
@@ -890,7 +935,10 @@ func TestFolderPaneLowercaseFCreatesFlashcardDeck(t *testing.T) {
 	}
 	selected, ok := got.selectedFolderItem().(Snippet)
 	if !ok || selected.File != "00-cards.txt" {
-		t.Fatalf("expected flashcard deck to be selected, got %T %v", got.selectedFolderItem(), got.selectedFolderItem())
+		t.Fatalf("expected created flashcard deck to be selected, got %T %v", got.selectedFolderItem(), got.selectedFolderItem())
+	}
+	if !got.folderExpanded[Folder("work")] {
+		t.Fatal("expected folder to expand after creating a visible flashcard deck")
 	}
 	if _, err := os.Stat(filepath.Join(tmp, "work", "00-cards.txt")); err != nil {
 		t.Fatalf("flashcard deck was not created: %v", err)
@@ -1283,6 +1331,9 @@ func TestEmptyFolderSelectionDisplaysDashboard(t *testing.T) {
 	if !strings.Contains(view, "snippets    0 root, 1 nested") {
 		t.Fatalf("expected snippet count in dashboard, got %q", view)
 	}
+	if !strings.Contains(view, "cards       0 root, 0 nested") {
+		t.Fatalf("expected flashcard count in dashboard, got %q", view)
+	}
 	if !strings.Contains(view, "modified    ") {
 		t.Fatalf("expected modified stat in dashboard, got %q", view)
 	}
@@ -1308,5 +1359,196 @@ func TestFolderDashboardShowsFlashcardReadyStatus(t *testing.T) {
 	m.displayFolderDashboard()
 	if view := m.Code.View(); !strings.Contains(view, "flashcards  ready to review") {
 		t.Fatalf("expected ready flashcards status in dashboard, got %q", view)
+	}
+	if view := m.Code.View(); !strings.Contains(view, "cards       1 root, 0 nested") {
+		t.Fatalf("expected flashcard count in dashboard, got %q", view)
+	}
+	if view := m.Code.View(); !strings.Contains(view, "results     0 correct, 0 incorrect, 1 pending") {
+		t.Fatalf("expected flashcard result counts in dashboard, got %q", view)
+	}
+}
+
+func TestFolderDashboardShowsResetFlashcardsHintForAnsweredDeck(t *testing.T) {
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.config.FlashcardsEnabled = true
+	folder := Folder(defaultSnippetFolder)
+	m.Lists[folder] = newList([]list.Item{
+		Snippet{
+			Name:     "00-cards+",
+			Folder:   defaultSnippetFolder,
+			File:     "00-cards+.txt",
+			Language: "txt",
+		},
+	}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{folder})
+	m.Folders.Select(0)
+
+	m.displayFolderDashboard()
+	view := m.Code.View()
+	if !strings.Contains(view, "reset answered cards to 00-cards.") {
+		t.Fatalf("expected reset hint in folder dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "z") {
+		t.Fatalf("expected z binding in folder dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "n • create a new snippet.") {
+		t.Fatalf("expected new snippet hint in folder dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "F • review cards for this folder.") {
+		t.Fatalf("expected review cards hint in folder dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "z • reset answered cards to 00-cards.") {
+		t.Fatalf("expected reset cards hint alongside folder actions, got %q", view)
+	}
+}
+
+func TestFolderDashboardShowsResetFlashcardsHintForMixedDecks(t *testing.T) {
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.config.FlashcardsEnabled = true
+	folder := Folder(defaultSnippetFolder)
+	m.Lists[folder] = newList([]list.Item{
+		Snippet{Name: "00-cards", Folder: defaultSnippetFolder, File: "00-cards.txt", Language: "txt"},
+		Snippet{Name: "00-cards+", Folder: defaultSnippetFolder, File: "00-cards+.txt", Language: "txt"},
+		Snippet{Name: "00-cards-", Folder: defaultSnippetFolder, File: "00-cards-.txt", Language: "txt"},
+	}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{folder})
+	m.Folders.Select(0)
+
+	m.displayFolderDashboard()
+	view := m.Code.View()
+	if !strings.Contains(view, "flashcards  ready + answered cards") {
+		t.Fatalf("expected mixed flashcard status in dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "z • reset answered cards to 00-cards.") {
+		t.Fatalf("expected reset hint for mixed decks in folder dashboard, got %q", view)
+	}
+}
+
+func TestFolderDashboardRefreshShowsResetFlashcardsHintWithoutManualKeyRefresh(t *testing.T) {
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.config.FlashcardsEnabled = true
+	folder := Folder(defaultSnippetFolder)
+	m.Lists[folder] = newList([]list.Item{
+		Snippet{
+			Name:     "00-cards+",
+			Folder:   defaultSnippetFolder,
+			File:     "00-cards+.txt",
+			Language: "txt",
+		},
+	}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{folder})
+	m.Folders.Select(0)
+
+	cmd := m.updateContent()
+	if cmd == nil {
+		t.Fatal("expected dashboard update command")
+	}
+
+	updated, _ := m.Update(cmd())
+	view := updated.(*Model).Code.View()
+	if !strings.Contains(view, "z • reset answered cards to 00-cards.") {
+		t.Fatalf("expected live dashboard refresh to show reset hint, got %q", view)
+	}
+}
+
+func TestFolderTreeHidesFlashcardDeckEntries(t *testing.T) {
+	m := newTestModel()
+	folder := Folder(defaultSnippetFolder)
+	m.Lists[folder].InsertItem(1, Snippet{
+		Name:     "00-cards",
+		Folder:   defaultSnippetFolder,
+		File:     "00-cards.txt",
+		Language: "txt",
+	})
+	m.Lists[folder].InsertItem(1, Snippet{
+		Name:     "00-cards+",
+		Folder:   defaultSnippetFolder,
+		File:     "00-cards+.txt",
+		Language: "txt",
+	})
+	sortSnippetList(m.Lists[folder])
+	m.rebuildFolderTree()
+	m.folderExpanded[folder] = true
+
+	items := m.folderTree.visibleItems(m.folderExpanded)
+	visiblePending := false
+	for _, item := range items {
+		snippet, ok := item.(Snippet)
+		if ok && isHiddenFlashcardDeck(snippet) {
+			t.Fatalf("expected answered flashcard decks to stay hidden from folder tree, got %v", snippet)
+		}
+		if ok && snippet.File == "00-cards.txt" {
+			visiblePending = true
+		}
+	}
+	if !visiblePending {
+		t.Fatal("expected plain 00-cards deck to stay visible in the folder tree")
+	}
+}
+
+func TestFolderTreeShowsDescendantFlashcardDots(t *testing.T) {
+	m := newNestedFolderTestModel()
+	m.Lists[Folder("work")].InsertItem(len(m.Lists[Folder("work")].Items()), Snippet{
+		Name:     "00-cards+",
+		Folder:   "work",
+		File:     "00-cards+.txt",
+		Language: "txt",
+	})
+	m.Lists[Folder("work/backend")].InsertItem(len(m.Lists[Folder("work/backend")].Items()), Snippet{
+		Name:     "00-cards-",
+		Folder:   "work/backend",
+		File:     "00-cards-.txt",
+		Language: "txt",
+	})
+	sortSnippetList(m.Lists[Folder("work")])
+	sortSnippetList(m.Lists[Folder("work/backend")])
+	m.rebuildFolderTree()
+
+	delegate := folderDelegate{
+		styles:     m.FoldersStyle,
+		depths:     m.folderTree.depths,
+		expanded:   m.folderExpanded,
+		children:   m.folderTree.children,
+		snippets:   m.folderTree.snippets,
+		flashcards: m.folderTree.flashcards,
+	}
+	model := list.New([]list.Item{Folder("work")}, delegate, 40, 1)
+
+	var out bytes.Buffer
+	delegate.Render(&out, model, 0, Folder("work"))
+	rendered := out.String()
+	if strings.Count(rendered, "●") != 2 {
+		t.Fatalf("expected one dot per descendant flashcard deck, got %q", rendered)
+	}
+}
+
+func TestFolderTreeDoesNotShowDotForPendingFlashcardDeck(t *testing.T) {
+	m := newNestedFolderTestModel()
+	m.Lists[Folder("work")].InsertItem(len(m.Lists[Folder("work")].Items()), Snippet{
+		Name:     "00-cards",
+		Folder:   "work",
+		File:     "00-cards.txt",
+		Language: "txt",
+	})
+	sortSnippetList(m.Lists[Folder("work")])
+	m.rebuildFolderTree()
+
+	delegate := folderDelegate{
+		styles:     m.FoldersStyle,
+		depths:     m.folderTree.depths,
+		expanded:   m.folderExpanded,
+		children:   m.folderTree.children,
+		snippets:   m.folderTree.snippets,
+		flashcards: m.folderTree.flashcards,
+	}
+	model := list.New([]list.Item{Folder("work")}, delegate, 40, 1)
+
+	var out bytes.Buffer
+	delegate.Render(&out, model, 0, Folder("work"))
+	if rendered := out.String(); strings.Contains(rendered, "●") {
+		t.Fatalf("expected pending flashcard deck to avoid status dots, got %q", rendered)
 	}
 }

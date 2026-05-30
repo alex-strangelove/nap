@@ -350,6 +350,9 @@ func writeSnippets(config Config, snippets []Snippet) {
 
 func listSnippets(snippets []Snippet) {
 	for _, snippet := range snippets {
+		if isHiddenFlashcardDeck(snippet) {
+			continue
+		}
 		fmt.Println(snippet)
 	}
 }
