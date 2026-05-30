@@ -28,7 +28,9 @@ var (
 var defaultFlashcardDeckTemplate string
 
 type flashcardsFinishedMsg struct {
-	err error
+	err         error
+	snippetPath string
+	preview     bool
 }
 
 func getFlashcardsCommand(config Config) (string, []string) {

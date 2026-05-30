@@ -418,6 +418,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.displayError(flashcardsError(m.config, msg.err))
 			return m, nil
 		}
+		if msg.preview {
+			if snippet, ok := m.selectedFolderItem().(Snippet); ok && msg.snippetPath == snippet.Path() {
+				m.pane = folderPane
+				m.updateKeyMap()
+				return m, tea.Batch(
+					m.updateActivePane(changeStateMsg{newState: m.state}),
+					m.updateFoldersForSelection(Folder(snippet.Folder), true),
+				)
+			}
+		}
 		return m, m.updateContent()
 	case changeStateMsg:
 		m.List().SetDelegate(snippetDelegate{styles: m.ListStyle, state: msg.newState, compact: m.isCollapsedPreview()})
@@ -665,6 +675,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.NextPane):
 			m.nextPane()
 		case key.Matches(msg, m.keys.PreviousPane):
+			if cmd := m.openFlashcardsOnPaneLeft(); cmd != nil {
+				m.previousPane()
+				m.updateKeyMap()
+				return m, tea.Batch(m.updateActivePane(msg), cmd)
+			}
 			m.previousPane()
 		case key.Matches(msg, m.keys.Quit):
 			m.saveState()
@@ -941,8 +956,12 @@ func (m *Model) updateFolderTreeNavigation(msg tea.KeyMsg) (tea.Cmd, bool) {
 	selectedItem := m.selectedFolderItem()
 	selectedFolder := m.selectedFolder()
 	switch msg.String() {
-	case "left", "l":
+	case "right", "l":
 		if snippet, ok := selectedItem.(Snippet); ok {
+			if m.config.FlashcardsEnabled && isFlashcardDeck(snippet) {
+				m.selectSnippetInFolder(Folder(snippet.Folder), snippet)
+				return m.runFlashcards(snippet, false), true
+			}
 			m.selectSnippetInFolder(Folder(snippet.Folder), snippet)
 			m.pane = contentPane
 			return m.updateActivePane(msg), true
@@ -962,7 +981,7 @@ func (m *Model) updateFolderTreeNavigation(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 		m.pane = contentPane
 		return m.updateActivePane(msg), true
-	case "right":
+	case "left", "h":
 		if _, ok := selectedItem.(Snippet); ok {
 			return m.updateFoldersForSelection(selectedFolder, true), true
 		}
@@ -973,21 +992,6 @@ func (m *Model) updateFolderTreeNavigation(msg tea.KeyMsg) (tea.Cmd, bool) {
 		if parent, ok := m.folderTree.parent(selectedFolder); ok {
 			return m.updateFoldersForSelection(parent, true), true
 		}
-
-		m.pane = contentPane
-		return m.updateActivePane(msg), true
-	case "h":
-		if _, ok := selectedItem.(Snippet); ok {
-			return m.updateFoldersForSelection(selectedFolder, true), true
-		}
-		if m.folderExpanded[selectedFolder] && m.folderTree.hasChildren(selectedFolder) {
-			delete(m.folderExpanded, selectedFolder)
-			return m.updateFoldersForSelection(selectedFolder, false), true
-		}
-		if parent, ok := m.folderTree.parent(selectedFolder); ok {
-			return m.updateFoldersForSelection(parent, true), true
-		}
-
 		return nil, true
 	case "f":
 		if !m.keys.CreateFlashcards.Enabled() {
@@ -1869,7 +1873,22 @@ func (m *Model) reviewFlashcards() tea.Cmd {
 		return nil
 	}
 
-	path, err := snippetStoragePath(m.config.Home, deck)
+	return m.runFlashcards(deck, false)
+}
+
+func (m *Model) openFlashcardsOnPaneLeft() tea.Cmd {
+	if !m.config.FlashcardsEnabled || m.state != navigatingState || m.pane != contentPane {
+		return nil
+	}
+	snippet := m.selectedSnippet()
+	if !isFlashcardDeck(snippet) || snippet.Path() == "" {
+		return nil
+	}
+	return m.runFlashcards(snippet, true)
+}
+
+func (m *Model) runFlashcards(snippet Snippet, preview bool) tea.Cmd {
+	path, err := snippetStoragePath(m.config.Home, snippet)
 	if err != nil {
 		m.displayError(err.Error())
 		return nil
@@ -1882,7 +1901,11 @@ func (m *Model) reviewFlashcards() tea.Cmd {
 	}
 
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return flashcardsFinishedMsg{err: err}
+		return flashcardsFinishedMsg{
+			err:         err,
+			snippetPath: snippet.Path(),
+			preview:     preview,
+		}
 	})
 }
 

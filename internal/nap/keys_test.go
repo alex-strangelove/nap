@@ -717,10 +717,10 @@ func TestSnippetDeletionPromptDisplaysConfirmation(t *testing.T) {
 	}
 }
 
-func TestFolderPaneLeftExpandsTreeBeforeDescending(t *testing.T) {
+func TestFolderPaneRightExpandsTreeBeforeDescending(t *testing.T) {
 	m := newNestedFolderTestModel()
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	if cmd == nil {
 		t.Fatalf("expected folder tree expansion command")
 	}
@@ -738,7 +738,7 @@ func TestFolderPaneLeftExpandsTreeBeforeDescending(t *testing.T) {
 	}
 }
 
-func TestFolderPaneLeftOnLeafExpandsToShowSnippetChildren(t *testing.T) {
+func TestFolderPaneRightOnLeafExpandsToShowSnippetChildren(t *testing.T) {
 	m := newNestedFolderTestModel()
 	m.folderExpanded[Folder("work")] = true
 
@@ -746,7 +746,7 @@ func TestFolderPaneLeftOnLeafExpandsToShowSnippetChildren(t *testing.T) {
 	m.Folders.SetItems(msg.items)
 	m.Folders.Select(msg.selectedFolderIndex)
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	got := updated.(*Model)
 	if got.pane != folderPane {
 		t.Fatalf("pane mismatch: got %v want %v", got.pane, folderPane)
@@ -777,7 +777,7 @@ func TestFolderPaneLExpandsTreeBeforeDescending(t *testing.T) {
 	}
 }
 
-func TestFolderPaneLeftOnExpandedFolderWithSnippetsSelectsFirstSnippet(t *testing.T) {
+func TestFolderPaneRightOnExpandedFolderWithSnippetsSelectsFirstSnippet(t *testing.T) {
 	m := newBoundIndexTestModel()
 	m.pane = folderPane
 	m.folderExpanded[Folder("work")] = true
@@ -786,7 +786,7 @@ func TestFolderPaneLeftOnExpandedFolderWithSnippetsSelectsFirstSnippet(t *testin
 	m.Folders.SetItems(msg.items)
 	m.Folders.Select(msg.selectedFolderIndex)
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	if cmd == nil {
 		t.Fatalf("expected tree selection command")
 	}
@@ -1146,6 +1146,34 @@ func TestSnippetTreeItemHReturnsToParentFolder(t *testing.T) {
 	m.Folders.Select(msg.selectedFolderIndex)
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if cmd == nil {
+		t.Fatalf("expected parent selection command")
+	}
+
+	updated, _ = updated.(*Model).Update(cmd())
+	got := updated.(*Model)
+	if got.selectedFolder() != Folder("work") {
+		t.Fatalf("selected folder mismatch: got %q want %q", got.selectedFolder(), Folder("work"))
+	}
+	if _, ok := got.selectedFolderItem().(Folder); !ok {
+		t.Fatalf("expected parent folder to be selected, got %T", got.selectedFolderItem())
+	}
+}
+
+func TestSnippetTreeItemLeftReturnsToParentFolder(t *testing.T) {
+	m := newBoundIndexTestModel()
+	m.folderExpanded[Folder("work")] = true
+
+	msg := m.updateFoldersView(Snippet{
+		Name:     "01-index",
+		Folder:   "work",
+		File:     "01-index.md",
+		Language: "md",
+	}, false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	if cmd == nil {
 		t.Fatalf("expected parent selection command")
 	}

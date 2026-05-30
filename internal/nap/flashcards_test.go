@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestGetFlashcardsCommand(t *testing.T) {
@@ -131,5 +132,234 @@ func TestReviewFlashcardsDoesNotCreateDeckWhenMissing(t *testing.T) {
 	decks := m.flashcardDecks(Folder(defaultSnippetFolder))
 	if len(decks) != 0 {
 		t.Fatalf("expected review to leave flashcard decks unchanged, got %d", len(decks))
+	}
+}
+
+func TestUpdateContentDoesNotAutoPreviewFlashcardDecks(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.config.FlashcardsCommand = "true"
+	m.pane = contentPane
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	deck := Snippet{
+		Name:     "00-cards",
+		Folder:   defaultSnippetFolder,
+		File:     "00-cards.md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte("# cards"), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Lists[Folder(defaultSnippetFolder)].Select(0)
+	m.Folders.SetItems([]list.Item{deck})
+	m.Folders.Select(0)
+
+	cmd := m.updateContent()
+	if cmd == nil {
+		return
+	}
+	if got := fmt.Sprintf("%T", cmd()); got == "tea.execMsg" {
+		t.Fatalf("expected normal preview update, got flashcard exec command")
+	}
+}
+
+func TestPreviousPaneOpensFlashcardsForDeckSnippet(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.config.FlashcardsCommand = "true"
+	m.pane = contentPane
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	deck := Snippet{
+		Name:     "00-cards",
+		Folder:   defaultSnippetFolder,
+		File:     "00-cards.md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte("# cards"), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Lists[Folder(defaultSnippetFolder)].Select(0)
+	m.Folders.SetItems([]list.Item{deck})
+	m.Folders.Select(0)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if cmd == nil {
+		t.Fatal("expected left pane switch to launch flashcards")
+	}
+	if got := fmt.Sprintf("%T", cmd()); got != "tea.BatchMsg" {
+		t.Fatalf("expected batched pane switch and flashcard launch, got %s", got)
+	}
+	got := updated.(*Model)
+	if got.pane != folderPane {
+		t.Fatalf("expected left pane switch to focus folder pane, got %v", got.pane)
+	}
+}
+
+func TestSnippetTreeRightOpensFlashcards(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.config.FlashcardsCommand = "true"
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	deck := Snippet{
+		Name:     "00-cards",
+		Folder:   defaultSnippetFolder,
+		File:     "00-cards.md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte("# cards"), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Lists[Folder(defaultSnippetFolder)].Select(0)
+	m.Folders.SetItems([]list.Item{deck})
+	m.Folders.Select(0)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if cmd == nil {
+		t.Fatal("expected right to launch flashcards")
+	}
+	if got := fmt.Sprintf("%T", cmd()); got != "tea.execMsg" {
+		t.Fatalf("expected flashcard exec command, got %s", got)
+	}
+	if got := updated.(*Model); got.pane != folderPane {
+		t.Fatalf("expected right to keep focus in folder pane, got %v", got.pane)
+	}
+}
+
+func TestPreviousPaneOpensFlashcardsForPreviewedDeckWhenFolderIsSelected(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.config.FlashcardsCommand = "true"
+	m.pane = contentPane
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	deck := Snippet{
+		Name:     "00-cards",
+		Folder:   defaultSnippetFolder,
+		File:     "00-cards.md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte("# cards"), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Lists[Folder(defaultSnippetFolder)].Select(0)
+	m.Folders.SetItems([]list.Item{Folder(defaultSnippetFolder)})
+	m.Folders.Select(0)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	if cmd == nil {
+		t.Fatal("expected h to launch flashcards for the previewed deck")
+	}
+	if got := fmt.Sprintf("%T", cmd()); got != "tea.BatchMsg" {
+		t.Fatalf("expected batched pane switch and flashcard launch, got %s", got)
+	}
+	if got := updated.(*Model); got.pane != folderPane {
+		t.Fatalf("expected h to move focus to folder pane, got %v", got.pane)
+	}
+}
+
+func TestPreviewFlashcardsReturnsToFolderNavigation(t *testing.T) {
+	m := newTestModel()
+	m.config.FlashcardsEnabled = true
+	m.config.FlashcardsCommand = "hascard"
+	m.pane = contentPane
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	deck := Snippet{
+		Name:     "00-cards",
+		Folder:   defaultSnippetFolder,
+		File:     "00-cards.md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Lists[Folder(defaultSnippetFolder)].Select(0)
+	m.Folders.SetItems([]list.Item{deck})
+	m.Folders.Select(0)
+
+	updated, cmd := m.Update(flashcardsFinishedMsg{snippetPath: deck.Path(), preview: true})
+	if cmd == nil {
+		t.Fatal("expected preview return to refresh folder selection")
+	}
+	if got := updated.(*Model); got.pane != folderPane {
+		t.Fatalf("expected preview return to focus folder pane, got %v", got.pane)
+	}
+}
+
+func TestFlashcardPreviewRelaunchesAfterReturningToPreview(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.config.FlashcardsCommand = "true"
+	m.pane = contentPane
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	deck := Snippet{
+		Name:     "00-cards",
+		Folder:   defaultSnippetFolder,
+		File:     "00-cards.md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte("# cards"), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Lists[Folder(defaultSnippetFolder)].Select(0)
+	m.Folders.SetItems([]list.Item{deck})
+	m.Folders.Select(0)
+
+	updated, _ := m.Update(flashcardsFinishedMsg{snippetPath: deck.Path(), preview: true})
+	got := updated.(*Model)
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if cmd == nil {
+		t.Fatal("expected tab to switch back to preview")
+	}
+	got = updated.(*Model)
+	if got.pane != contentPane {
+		t.Fatalf("expected tab to enter preview, got %v", got.pane)
+	}
+
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if cmd == nil {
+		t.Fatal("expected left pane switch to relaunch flashcards")
+	}
+	if kind := fmt.Sprintf("%T", cmd()); kind != "tea.BatchMsg" {
+		t.Fatalf("expected batched pane switch and flashcard relaunch, got %s", kind)
 	}
 }
