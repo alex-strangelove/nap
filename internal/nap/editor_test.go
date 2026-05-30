@@ -96,6 +96,19 @@ func TestPreviewCmdPreservesExplicitStyle(t *testing.T) {
 	}
 }
 
+func TestSearchEditorCmdUsesHelixLocationTarget(t *testing.T) {
+	cmd := searchEditorCmd("plans/roadmap.md", 3, 7)
+
+	if filepath.Base(cmd.Path) != searchEditor {
+		t.Fatalf("search editor is incorrect: want %q but got %q", searchEditor, cmd.Path)
+	}
+
+	wantArgs := fmt.Sprint([]string{searchEditor, "plans/roadmap.md:3:7"})
+	if argStr := fmt.Sprint(cmd.Args); argStr != wantArgs {
+		t.Fatalf("search editor args are incorrect: want %q but got %q", wantArgs, argStr)
+	}
+}
+
 func TestGetPreviewer(t *testing.T) {
 	tt := []struct {
 		Name         string
@@ -159,5 +172,15 @@ func TestIsMarkdownLanguage(t *testing.T) {
 		if got := isMarkdownLanguage(language); got != want {
 			t.Fatalf("markdown detection for %q is incorrect: want %t but got %t", language, want, got)
 		}
+	}
+}
+
+func TestSearchQueryLocation(t *testing.T) {
+	loc, ok := searchQueryLocation("first line\nsecond marker here\nthird", "marker")
+	if !ok {
+		t.Fatal("expected to find marker")
+	}
+	if loc.line != 2 || loc.column != 8 {
+		t.Fatalf("location mismatch: got %d:%d want 2:8", loc.line, loc.column)
 	}
 }

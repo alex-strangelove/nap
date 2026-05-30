@@ -3,6 +3,7 @@ package nap
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -42,6 +43,7 @@ func TestFindSnippetSearchesFileContents(t *testing.T) {
 
 func TestSearchModeSearchesContentsAndAppliesSelection(t *testing.T) {
 	m, snippets := newSearchTestModel(t)
+	m.enterSearchMode(contentSearchMode, false)
 	m.searchInput.SetValue("rollback checklist")
 	m.refreshSearchResults()
 
@@ -75,6 +77,7 @@ func TestSearchModeSearchesContentsAndAppliesSelection(t *testing.T) {
 
 func TestSearchModeCtrlJKNavigatesResults(t *testing.T) {
 	m, _ := newSearchTestModel(t)
+	m.enterSearchMode(contentSearchMode, false)
 
 	initial := m.selectedSnippet().Path()
 	if initial == "" {
@@ -102,6 +105,150 @@ func TestSearchModeCtrlJKNavigatesResults(t *testing.T) {
 	got = updated.(*Model)
 	if selected := got.selectedSnippet().Path(); selected != initial {
 		t.Fatalf("ctrl+k selection mismatch: got %q want %q", selected, initial)
+	}
+}
+
+func TestSearchModeTypingSearchKeysDoesNotSwitchScope(t *testing.T) {
+	m, _ := newSearchTestModel(t)
+	m.enterSearchMode(previewSearchMode, false)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if cmd != nil {
+		if next := cmd(); next != nil {
+			updated, _ = updated.(*Model).Update(next)
+		}
+	}
+
+	got := updated.(*Model)
+	if got.searchMode != previewSearchMode {
+		t.Fatalf("search mode changed unexpectedly: got %v want %v", got.searchMode, previewSearchMode)
+	}
+	if got.searchInput.Value() != "s" {
+		t.Fatalf("expected lowercase search key to update input, got %q", got.searchInput.Value())
+	}
+
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("S")})
+	if cmd != nil {
+		if next := cmd(); next != nil {
+			updated, _ = updated.(*Model).Update(next)
+		}
+	}
+
+	got = updated.(*Model)
+	if got.searchMode != previewSearchMode {
+		t.Fatalf("search mode changed unexpectedly after uppercase input: got %v want %v", got.searchMode, previewSearchMode)
+	}
+	if got.searchInput.Value() != "sS" {
+		t.Fatalf("expected uppercase search key to update input, got %q", got.searchInput.Value())
+	}
+}
+
+func TestMetadataSearchModeOnlyMatchesFoldersAndFiles(t *testing.T) {
+	m, snippets := newSearchTestModel(t)
+	m.enterSearchMode(metadataSearchMode, false)
+	m.searchInput.SetValue("rollback checklist")
+	m.refreshSearchResults()
+
+	if _, ok := m.selectedSearchSnippet(); ok {
+		t.Fatalf("metadata search should ignore file contents")
+	}
+
+	m.searchInput.SetValue("roadmap")
+	m.refreshSearchResults()
+
+	selected, ok := m.selectedSearchSnippet()
+	if !ok || selected.Path() != snippets[0].Path() {
+		t.Fatalf("metadata search mismatch: got %#v want %q", selected, snippets[0].Path())
+	}
+}
+
+func TestPreviewSearchModeKeepsCurrentSnippet(t *testing.T) {
+	m, snippets := newSearchTestModel(t)
+	m.enterSearchMode(contentSearchMode, false)
+	m.searchInput.SetValue("package")
+	m.refreshSearchResults()
+
+	if selected, ok := m.selectedSearchSnippet(); !ok || selected.Path() != snippets[1].Path() {
+		t.Fatalf("expected content search to select %q, got %#v", snippets[1].Path(), selected)
+	}
+
+	m.enterSearchMode(previewSearchMode, true)
+
+	if selected := m.selectedSnippet(); selected.Path() != snippets[0].Path() {
+		t.Fatalf("preview search should stay on current file: got %q want %q", selected.Path(), snippets[0].Path())
+	}
+	if got := m.leftPaneView(); got != m.Folders.View() {
+		t.Fatalf("preview search should keep folder pane visible")
+	}
+}
+
+func TestContentSearchModeHighlightsPreview(t *testing.T) {
+	m, _ := newSearchTestModel(t)
+	m.enterSearchMode(contentSearchMode, false)
+	m.searchInput.SetValue("rollback checklist")
+	m.refreshSearchResults()
+
+	highlighted := m.previewContent("# Roadmap\nrollback checklist\n")
+	if !strings.Contains(highlighted, ansiResetBackground) {
+		t.Fatalf("expected content search preview highlight, got %q", highlighted)
+	}
+}
+
+func TestContentSearchModeFocusSwitchesBetweenResultsAndPreview(t *testing.T) {
+	m, _ := newSearchTestModel(t)
+	m.enterSearchMode(contentSearchMode, false)
+	m.searchInput.SetValue("rollback checklist")
+	m.refreshSearchResults()
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
+	if cmd != nil {
+		if next := cmd(); next != nil {
+			updated, _ = updated.(*Model).Update(next)
+		}
+	}
+
+	got := updated.(*Model)
+	if got.pane != contentPane {
+		t.Fatalf("expected ctrl+l to focus preview, got pane %v", got.pane)
+	}
+	if highlighted := got.previewContent("# Roadmap\nrollback checklist\n"); !strings.Contains(highlighted, ansiResetBackground) {
+		t.Fatalf("expected highlight to remain visible in preview focus, got %q", highlighted)
+	}
+
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+	if cmd != nil {
+		if next := cmd(); next != nil {
+			updated, _ = updated.(*Model).Update(next)
+		}
+	}
+
+	got = updated.(*Model)
+	if got.pane != folderPane {
+		t.Fatalf("expected ctrl+h to focus search results, got pane %v", got.pane)
+	}
+}
+
+func TestCtrlCQuitsFromSearch(t *testing.T) {
+	m, _ := newSearchTestModel(t)
+	m.enterSearchMode(contentSearchMode, false)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("expected quit command")
+	}
+	if got := updated.(*Model).state; got != quittingState {
+		t.Fatalf("expected quitting state, got %v", got)
+	}
+}
+
+func TestPreviewSearchIgnoresRenderedOnlyMatches(t *testing.T) {
+	m, _ := newSearchTestModel(t)
+	m.enterSearchMode(previewSearchMode, false)
+	m.searchInput.SetValue("package")
+
+	highlighted := m.previewContent("package")
+	if highlighted != "package" {
+		t.Fatalf("expected rendered-only match to stay unhighlighted, got %q", highlighted)
 	}
 }
 
@@ -172,8 +319,6 @@ func newSearchTestModel(t *testing.T) (*Model, []Snippet) {
 	}
 
 	m.Init()
-	m.enterSearchMode()
-	m.refreshSearchResults()
 	return m, snippets
 }
 

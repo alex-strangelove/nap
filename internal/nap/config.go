@@ -26,38 +26,40 @@ type Config struct {
 
 	Theme string `env:"NAP_THEME" yaml:"theme"`
 
-	PrimaryColor        string `env:"NAP_PRIMARY_COLOR" yaml:"primary_color"`
-	PrimaryColorSubdued string `env:"NAP_PRIMARY_COLOR_SUBDUED" yaml:"primary_color_subdued"`
-	BrightGreenColor    string `env:"NAP_BRIGHT_GREEN" yaml:"bright_green"`
-	GreenColor          string `env:"NAP_GREEN" yaml:"green"`
-	BrightRedColor      string `env:"NAP_BRIGHT_RED" yaml:"bright_red"`
-	RedColor            string `env:"NAP_RED" yaml:"red"`
-	ForegroundColor     string `env:"NAP_FOREGROUND" yaml:"foreground"`
-	BackgroundColor     string `env:"NAP_BACKGROUND" yaml:"background"`
-	GrayColor           string `env:"NAP_GRAY" yaml:"gray"`
-	BlackColor          string `env:"NAP_BLACK" yaml:"black"`
-	WhiteColor          string `env:"NAP_WHITE" yaml:"white"`
+	PrimaryColor         string `env:"NAP_PRIMARY_COLOR" yaml:"primary_color"`
+	PrimaryColorSubdued  string `env:"NAP_PRIMARY_COLOR_SUBDUED" yaml:"primary_color_subdued"`
+	BrightGreenColor     string `env:"NAP_BRIGHT_GREEN" yaml:"bright_green"`
+	GreenColor           string `env:"NAP_GREEN" yaml:"green"`
+	BrightRedColor       string `env:"NAP_BRIGHT_RED" yaml:"bright_red"`
+	RedColor             string `env:"NAP_RED" yaml:"red"`
+	ForegroundColor      string `env:"NAP_FOREGROUND" yaml:"foreground"`
+	BackgroundColor      string `env:"NAP_BACKGROUND" yaml:"background"`
+	GrayColor            string `env:"NAP_GRAY" yaml:"gray"`
+	BlackColor           string `env:"NAP_BLACK" yaml:"black"`
+	WhiteColor           string `env:"NAP_WHITE" yaml:"white"`
+	SearchHighlightColor string `env:"NAP_SEARCH_HIGHLIGHT_COLOR" yaml:"search_highlight_color"`
 }
 
 func newConfig() Config {
 	return Config{
-		Home:                defaultHome(),
-		File:                "snippets.json",
-		DefaultLanguage:     defaultLanguage,
-		FlashcardsEnabled:   true,
-		FlashcardsCommand:   defaultFlashcardsCommand,
-		Theme:               "dracula",
-		PrimaryColor:        "#AFBEE1",
-		PrimaryColorSubdued: "#64708D",
-		BrightGreenColor:    "#BCE1AF",
-		GreenColor:          "#527251",
-		BrightRedColor:      "#E49393",
-		RedColor:            "#A46060",
-		ForegroundColor:     "15",
-		BackgroundColor:     "235",
-		GrayColor:           "241",
-		BlackColor:          "#373b41",
-		WhiteColor:          "#FFFFFF",
+		Home:                 defaultHome(),
+		File:                 "snippets.json",
+		DefaultLanguage:      defaultLanguage,
+		FlashcardsEnabled:    true,
+		FlashcardsCommand:    defaultFlashcardsCommand,
+		Theme:                "dracula",
+		PrimaryColor:         "#AFBEE1",
+		PrimaryColorSubdued:  "#64708D",
+		BrightGreenColor:     "#BCE1AF",
+		GreenColor:           "#527251",
+		BrightRedColor:       "#E49393",
+		RedColor:             "#A46060",
+		ForegroundColor:      "15",
+		BackgroundColor:      "235",
+		GrayColor:            "241",
+		BlackColor:           "#373b41",
+		WhiteColor:           "#FFFFFF",
+		SearchHighlightColor: "#FF8700",
 	}
 }
 

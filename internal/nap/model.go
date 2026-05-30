@@ -61,6 +61,14 @@ const (
 	languageInput
 )
 
+type searchMode int
+
+const (
+	previewSearchMode searchMode = iota
+	metadataSearchMode
+	contentSearchMode
+)
+
 // Model represents the state of the application.
 // It contains all the snippets organized in folders.
 type Model struct {
@@ -103,6 +111,7 @@ type Model struct {
 	searchDocs        []snippetSearchDoc
 	searchDirty       bool
 	searchRestorePane pane
+	searchMode        searchMode
 }
 
 // Init initialzes the application model.
@@ -135,10 +144,24 @@ func (m *Model) ensureSearchUI() {
 
 func newSearchInput() textinput.Model {
 	input := textinput.New()
-	input.Prompt = "Search: "
-	input.Placeholder = "folders, files, contents"
+	input.Prompt = "Find: "
+	input.Placeholder = "current file"
 	input.CharLimit = 0
 	return input
+}
+
+func (m *Model) configureSearchInput() {
+	switch m.searchMode {
+	case previewSearchMode:
+		m.searchInput.Prompt = "Find: "
+		m.searchInput.Placeholder = "current file"
+	case metadataSearchMode:
+		m.searchInput.Prompt = "Files: "
+		m.searchInput.Placeholder = "folders and file names"
+	case contentSearchMode:
+		m.searchInput.Prompt = "Text: "
+		m.searchInput.Placeholder = "file contents"
+	}
 }
 
 func (m *Model) invalidateSearchIndex() {
@@ -541,18 +564,48 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if key.Matches(msg, m.keys.Cancel) {
 				return m, m.exitSearchMode(false)
 			}
+			if key.Matches(msg, m.keys.SearchFocusLeft) && m.searchMode == contentSearchMode {
+				m.pane = folderPane
+				m.updateKeyMap()
+				return m, m.updateActivePane(msg)
+			}
+			if key.Matches(msg, m.keys.SearchFocusRight) && m.searchMode == contentSearchMode {
+				m.pane = contentPane
+				m.updateKeyMap()
+				return m, m.updateActivePane(msg)
+			}
+			if key.Matches(msg, m.keys.SearchEdit) {
+				return m, m.editSearchSelection()
+			}
 			if msg.String() == "enter" {
 				return m, m.exitSearchMode(true)
 			}
 
+			searchResultNavigation := false
 			if key.Matches(msg, m.keys.SearchPrevious) {
-				msg = tea.KeyMsg{Type: tea.KeyUp}
+				searchResultNavigation = true
+				if m.searchMode == previewSearchMode {
+					msg = tea.KeyMsg{Type: tea.KeyUp}
+				} else {
+					msg = tea.KeyMsg{Type: tea.KeyUp}
+				}
 			}
 			if key.Matches(msg, m.keys.SearchNext) {
-				msg = tea.KeyMsg{Type: tea.KeyDown}
+				searchResultNavigation = true
+				if m.searchMode == previewSearchMode {
+					msg = tea.KeyMsg{Type: tea.KeyDown}
+				} else {
+					msg = tea.KeyMsg{Type: tea.KeyDown}
+				}
 			}
 
-			if msg.String() == "up" || msg.String() == "down" || msg.String() == "pgup" || msg.String() == "pgdown" || msg.String() == "home" || msg.String() == "end" {
+			if !searchResultNavigation {
+				if cmd, ok := m.updateSearchContentScroll(msg); ok {
+					return m, cmd
+				}
+			}
+
+			if m.searchMode != previewSearchMode && m.pane == folderPane && (msg.String() == "up" || msg.String() == "down" || msg.String() == "pgup" || msg.String() == "pgdown" || msg.String() == "home" || msg.String() == "end") {
 				previous := m.selectedSnippet().Path()
 				var cmd tea.Cmd
 				*m.searchResults, cmd = m.searchResults.Update(msg)
@@ -662,8 +715,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.editSnippet()
 		case key.Matches(msg, m.keys.ReviewFlashcards):
 			return m, m.reviewFlashcards()
-		case key.Matches(msg, m.keys.Search):
-			return m, m.enterSearchMode()
+		case key.Matches(msg, m.keys.SearchPreview):
+			return m, m.enterSearchMode(previewSearchMode, false)
+		case key.Matches(msg, m.keys.SearchMetadata):
+			return m, m.enterSearchMode(metadataSearchMode, false)
+		case key.Matches(msg, m.keys.SearchContents):
+			return m, m.enterSearchMode(contentSearchMode, false)
 		}
 	case tea.MouseMsg:
 		if cmd, ok := m.updateContentScroll(msg); ok {
@@ -723,6 +780,28 @@ func (m *Model) previousPane() {
 // editSnippet opens the editor with the selected snippet file path.
 func (m *Model) editSnippet() tea.Cmd {
 	return tea.ExecProcess(editorCmd(m.selectedSnippetFilePath()), func(err error) tea.Msg {
+		return refreshContentMsg{}
+	})
+}
+
+func (m *Model) editSearchSelection() tea.Cmd {
+	path := m.selectedSnippetFilePath()
+	if path == "" {
+		return nil
+	}
+
+	line, column := 0, 0
+	query := strings.TrimSpace(m.searchInput.Value())
+	if (m.searchMode == previewSearchMode || m.searchMode == contentSearchMode) && query != "" {
+		content, err := os.ReadFile(path)
+		if err == nil {
+			if loc, ok := searchQueryLocation(string(content), query); ok {
+				line, column = loc.line, loc.column
+			}
+		}
+	}
+
+	return tea.ExecProcess(searchEditorCmd(path, line, column), func(err error) tea.Msg {
 		return refreshContentMsg{}
 	})
 }
@@ -933,8 +1012,37 @@ func (m *Model) applyContentView(msg contentRenderedMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.writeLineNumbers(msg.lineCount)
-	m.Code.SetContent(msg.rendered)
+	m.Code.SetContent(m.previewContent(msg.rendered))
 	return m, nil
+}
+
+func (m *Model) previewContent(rendered string) string {
+	query := strings.TrimSpace(m.searchInput.Value())
+	if !m.shouldHighlightPreview(query) || !m.selectedSnippetContainsQuery(query) {
+		return rendered
+	}
+	return highlightPreviewMatches(rendered, query, m.config)
+}
+
+func (m *Model) shouldHighlightPreview(query string) bool {
+	if m.state != searchingState || query == "" {
+		return false
+	}
+	return m.searchMode == previewSearchMode || m.searchMode == contentSearchMode
+}
+
+func (m *Model) selectedSnippetContainsQuery(query string) bool {
+	path := m.selectedSnippetFilePath()
+	if path == "" {
+		return false
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+
+	return strings.Contains(strings.ToLower(string(content)), strings.ToLower(query))
 }
 
 type keyHint struct {
@@ -976,7 +1084,6 @@ func (m *Model) updatePaneLayout(totalWidth int) {
 	folderWidth, snippetWidth := m.paneWidths()
 	m.setFoldersWidth(folderWidth)
 	m.setSnippetsWidth(snippetWidth)
-	m.setSearchWidth(folderWidth)
 
 	m.Folders.Title = m.foldersTitle()
 	m.LineNumbers.Width = 5
@@ -988,6 +1095,7 @@ func (m *Model) updatePaneLayout(totalWidth int) {
 	if m.Code.Width < minContentPaneWidth {
 		m.Code.Width = minContentPaneWidth
 	}
+	m.setSearchWidth(folderWidth, m.Code.Width)
 }
 
 func (m *Model) setFoldersWidth(width int) {
@@ -1013,13 +1121,20 @@ func (m *Model) setSnippetsWidth(width int) {
 	}
 }
 
-func (m *Model) setSearchWidth(width int) {
+func (m *Model) setSearchWidth(folderWidth, contentWidth int) {
+	if m.searchInput.Prompt == "" {
+		return
+	}
+	width := folderWidth
+	if m.searchMode == previewSearchMode {
+		width = contentWidth
+	}
+	m.searchInput.Width = maxWidth(width - len(m.searchInput.Prompt) - 2)
 	if m.searchResults == nil {
 		return
 	}
-	m.searchResults.SetWidth(width)
+	m.searchResults.SetWidth(folderWidth)
 	m.searchResults.SetHeight(m.height)
-	m.searchInput.Width = maxWidth(width - len(m.searchInput.Prompt) - 2)
 }
 
 func (m *Model) foldersTitle() string {
@@ -1051,6 +1166,15 @@ func (m *Model) contentHeader() string {
 		if folder, ok := m.folderDeletionTarget(); ok {
 			return m.ContentStyle.Title.Render(fmt.Sprintf("Delete %s? (y/N)", folderLabel(folder)))
 		}
+	}
+
+	if m.state == searchingState && m.searchMode == previewSearchMode {
+		return lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			m.ContentStyle.Title.Render("Find in file"),
+			m.ContentStyle.Separator.Render(" "),
+			m.searchInput.View(),
+		)
 	}
 
 	if selected, ok := m.selectedSearchSnippet(); ok {
@@ -1108,6 +1232,25 @@ func (m *Model) writeLineNumbers(n int) {
 
 func (m *Model) updateContentScroll(msg tea.Msg) (tea.Cmd, bool) {
 	if m.pane != contentPane || m.state != navigatingState {
+		return nil, false
+	}
+
+	previousOffset := m.Code.YOffset
+	var cmd tea.Cmd
+	m.Code, cmd = m.Code.Update(msg)
+	if m.Code.YOffset == previousOffset {
+		return nil, false
+	}
+
+	m.LineNumbers.SetYOffset(m.Code.YOffset)
+	return cmd, true
+}
+
+func (m *Model) updateSearchContentScroll(msg tea.Msg) (tea.Cmd, bool) {
+	if m.pane != contentPane || m.state != searchingState {
+		return nil, false
+	}
+	if m.searchMode != previewSearchMode && m.searchMode != contentSearchMode {
 		return nil, false
 	}
 
@@ -1203,9 +1346,14 @@ func (m *Model) updateKeyMap() {
 	m.keys.ChangeFolder.SetEnabled(m.pane == folderPane && !isSearching)
 	m.keys.CreateFlashcards.SetEnabled(flashcardsReady && deckCount == 0)
 	m.keys.ReviewFlashcards.SetEnabled(flashcardsReady && deckCount == 1)
-	m.keys.Search.SetEnabled(!isEditing && !isSearching)
+	m.keys.SearchPreview.SetEnabled(!isEditing && !isSearching)
+	m.keys.SearchMetadata.SetEnabled(!isEditing && !isSearching)
+	m.keys.SearchContents.SetEnabled(!isEditing && !isSearching)
 	m.keys.SearchNext.SetEnabled(isSearching)
 	m.keys.SearchPrevious.SetEnabled(isSearching)
+	m.keys.SearchEdit.SetEnabled(isSearching)
+	m.keys.SearchFocusLeft.SetEnabled(isSearching && m.searchMode == contentSearchMode)
+	m.keys.SearchFocusRight.SetEnabled(isSearching && m.searchMode == contentSearchMode)
 }
 
 func (m *Model) flashcardDecks(folder Folder) []Snippet {
@@ -1258,7 +1406,7 @@ func (m *Model) selectedFolderItem() list.Item {
 }
 
 func (m *Model) selectedSearchSnippet() (Snippet, bool) {
-	if m.state != searchingState || m.searchResults == nil {
+	if m.state != searchingState || m.searchMode == previewSearchMode || m.searchResults == nil {
 		return Snippet{}, false
 	}
 	item := m.searchResults.SelectedItem()
@@ -1279,6 +1427,9 @@ func (m *Model) List() *list.Model {
 
 func (m *Model) refreshSearchResults() tea.Cmd {
 	m.ensureSearchUI()
+	if m.searchMode == previewSearchMode {
+		return m.updateContent()
+	}
 	m.ensureSearchIndex()
 
 	currentPath := ""
@@ -1288,7 +1439,15 @@ func (m *Model) refreshSearchResults() tea.Cmd {
 		currentPath = snippet.Path()
 	}
 
-	results := searchSnippetDocs(m.searchDocs, m.searchInput.Value())
+	var results []Snippet
+	switch m.searchMode {
+	case metadataSearchMode:
+		results = searchSnippetMetadataDocs(m.searchDocs, m.searchInput.Value())
+	case contentSearchMode:
+		results = searchSnippetContentDocs(m.searchDocs, m.searchInput.Value())
+	default:
+		results = searchSnippetDocs(m.searchDocs, m.searchInput.Value())
+	}
 	items := make([]list.Item, 0, len(results))
 	selectedIndex := 0
 	for idx, snippet := range results {
@@ -1308,12 +1467,22 @@ func (m *Model) refreshSearchResults() tea.Cmd {
 	return tea.Batch(setItemsCmd, m.updateContent())
 }
 
-func (m *Model) enterSearchMode() tea.Cmd {
+func (m *Model) enterSearchMode(mode searchMode, preserveQuery bool) tea.Cmd {
 	m.ensureSearchUI()
-	m.searchRestorePane = m.pane
+	if m.state != searchingState {
+		m.searchRestorePane = m.pane
+	}
 	m.state = searchingState
-	m.pane = folderPane
-	m.searchInput.SetValue("")
+	m.searchMode = mode
+	m.configureSearchInput()
+	if mode == previewSearchMode {
+		m.pane = contentPane
+	} else {
+		m.pane = folderPane
+	}
+	if !preserveQuery {
+		m.searchInput.SetValue("")
+	}
 	m.searchInput.CursorEnd()
 	m.updateKeyMap()
 	return tea.Batch(m.updateActivePane(changeStateMsg{newState: searchingState}), m.searchInput.Focus(), m.refreshSearchResults())
@@ -1659,7 +1828,7 @@ func (m *Model) View() string {
 }
 
 func (m *Model) leftPaneView() string {
-	if m.state != searchingState || m.searchResults == nil {
+	if m.state != searchingState || m.searchMode == previewSearchMode || m.searchResults == nil {
 		return m.Folders.View()
 	}
 	return lipgloss.JoinVertical(

@@ -5,7 +5,9 @@ import "github.com/charmbracelet/bubbles/key"
 // KeyMap is the mappings of actions to key bindings.
 type KeyMap struct {
 	Quit              key.Binding
-	Search            key.Binding
+	SearchPreview     key.Binding
+	SearchMetadata    key.Binding
+	SearchContents    key.Binding
 	ToggleHelp        key.Binding
 	NewSnippet        key.Binding
 	CreateFlashcards  key.Binding
@@ -28,13 +30,18 @@ type KeyMap struct {
 	ChangeFolder      key.Binding
 	SearchNext        key.Binding
 	SearchPrevious    key.Binding
+	SearchEdit        key.Binding
+	SearchFocusLeft   key.Binding
+	SearchFocusRight  key.Binding
 	flashcardsEnabled bool
 }
 
 // DefaultKeyMap is the default key map for the application.
 var DefaultKeyMap = KeyMap{
-	Quit:             key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "exit")),
-	Search:           key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+	Quit:             key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "exit")),
+	SearchPreview:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "find in file")),
+	SearchMetadata:   key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "search files")),
+	SearchContents:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "search contents")),
 	ToggleHelp:       key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 	NewSnippet:       key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new snippet")),
 	CreateFlashcards: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "new cards"), key.WithDisabled()),
@@ -57,6 +64,9 @@ var DefaultKeyMap = KeyMap{
 	ChangeFolder:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "change folder"), key.WithDisabled()),
 	SearchNext:       key.NewBinding(key.WithKeys("ctrl+j"), key.WithHelp("ctrl+j", "next result"), key.WithDisabled()),
 	SearchPrevious:   key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "prev result"), key.WithDisabled()),
+	SearchEdit:       key.NewBinding(key.WithKeys("ctrl+e"), key.WithHelp("ctrl+e", "edit match"), key.WithDisabled()),
+	SearchFocusLeft:  key.NewBinding(key.WithKeys("ctrl+h"), key.WithHelp("ctrl+h", "focus search"), key.WithDisabled()),
+	SearchFocusRight: key.NewBinding(key.WithKeys("ctrl+l"), key.WithHelp("ctrl+l", "focus preview"), key.WithDisabled()),
 }
 
 // ShortHelp returns a quick help menu.
@@ -103,6 +113,6 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		{k.DeleteSnippet, k.DeleteFolder},
 		{k.RenameSnippet, k.SetFolder, k.TagSnippet, k.SetLanguage},
 		{k.NextPane, k.PreviousPane},
-		{k.Search, k.ToggleHelp, k.Quit},
+		{k.SearchPreview, k.SearchMetadata, k.SearchContents, k.SearchEdit, k.SearchFocusLeft, k.SearchFocusRight, k.ToggleHelp, k.Quit},
 	}
 }

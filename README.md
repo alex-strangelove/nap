@@ -46,9 +46,16 @@ nap
 | Set language of selected snippet | <kbd>L</kbd> |
 | Move to next pane | <kbd>l</kbd> |
 | Move to previous pane | <kbd>h</kbd> |
-| Search snippets by folder, file, or contents | <kbd>/</kbd> |
+| Find in the current file and highlight matches in preview | <kbd>/</kbd> |
+| Search folders and file names | <kbd>S</kbd> |
+| Search file contents globally | <kbd>s</kbd> |
+| Move to the next search result | <kbd>ctrl+j</kbd> |
+| Move to the previous search result | <kbd>ctrl+k</kbd> |
+| Focus search results during content search | <kbd>ctrl+h</kbd> |
+| Focus preview during content search | <kbd>ctrl+l</kbd> |
+| Open the current search match in Helix | <kbd>ctrl+e</kbd> |
 | Toggle help | <kbd>?</kbd> |
-| Quit application | <kbd>q</kbd> <kbd>ctrl+c</kbd> |
+| Quit application | <kbd>ctrl+c</kbd> |
 
 </details>
 
@@ -164,6 +171,7 @@ red: "#A46060"
 black: "#373B41"
 gray: "240"
 white: "#FFFFFF"
+search_highlight_color: "#FF8700"
 ```
 
 The configuration file can be overridden through environment variables:

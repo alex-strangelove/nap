@@ -12,6 +12,7 @@ import (
 
 const (
 	defaultEditor    = "nano"
+	searchEditor     = "hx"
 	defaultPreviewer = "glow"
 	defaultGlowStyle = "light"
 )
@@ -23,6 +24,14 @@ var errPreviewerNotFound = errors.New("previewer not found")
 func editorCmd(path string) *exec.Cmd {
 	editor, args := getEditor()
 	return exec.Command(editor, append(args, path)...)
+}
+
+func searchEditorCmd(path string, line, column int) *exec.Cmd {
+	target := path
+	if line > 0 && column > 0 {
+		target = fmt.Sprintf("%s:%d:%d", path, line, column)
+	}
+	return exec.Command(searchEditor, target)
 }
 
 func previewCmd(width int) *exec.Cmd {

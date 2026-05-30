@@ -19,6 +19,11 @@ type snippetSearchSource struct {
 	docs []snippetSearchDoc
 }
 
+type searchLocation struct {
+	line   int
+	column int
+}
+
 func (s snippetSearchSource) String(i int) string {
 	return s.docs[i].metadata
 }
@@ -54,6 +59,18 @@ func buildSnippetSearchDocs(home string, snippets []Snippet) []snippetSearchDoc 
 }
 
 func searchSnippetDocs(docs []snippetSearchDoc, query string) []Snippet {
+	return searchSnippetDocsWithMode(docs, query, true, true)
+}
+
+func searchSnippetMetadataDocs(docs []snippetSearchDoc, query string) []Snippet {
+	return searchSnippetDocsWithMode(docs, query, true, false)
+}
+
+func searchSnippetContentDocs(docs []snippetSearchDoc, query string) []Snippet {
+	return searchSnippetDocsWithMode(docs, query, false, true)
+}
+
+func searchSnippetDocsWithMode(docs []snippetSearchDoc, query string, includeMetadata bool, includeContent bool) []Snippet {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		results := make([]Snippet, 0, len(docs))
@@ -67,23 +84,29 @@ func searchSnippetDocs(docs []snippetSearchDoc, query string) []Snippet {
 	scores := map[int]int{}
 
 	for idx, doc := range docs {
-		if pos := strings.Index(doc.metadataLower, queryLower); pos >= 0 {
-			if pos > 400 {
-				pos = 400
+		if includeMetadata {
+			if pos := strings.Index(doc.metadataLower, queryLower); pos >= 0 {
+				if pos > 400 {
+					pos = 400
+				}
+				scores[idx] += 2000 - pos + strings.Count(doc.metadataLower, queryLower)*25
 			}
-			scores[idx] += 2000 - pos + strings.Count(doc.metadataLower, queryLower)*25
 		}
-		if pos := strings.Index(doc.contentLower, queryLower); pos >= 0 {
-			contentPenalty := pos / 4
-			if contentPenalty > 250 {
-				contentPenalty = 250
+		if includeContent {
+			if pos := strings.Index(doc.contentLower, queryLower); pos >= 0 {
+				contentPenalty := pos / 4
+				if contentPenalty > 250 {
+					contentPenalty = 250
+				}
+				scores[idx] += 1200 - contentPenalty + strings.Count(doc.contentLower, queryLower)*20
 			}
-			scores[idx] += 1200 - contentPenalty + strings.Count(doc.contentLower, queryLower)*20
 		}
 	}
 
-	for _, match := range fuzzy.FindFrom(query, snippetSearchSource{docs: docs}) {
-		scores[match.Index] += 700 + match.Score
+	if includeMetadata {
+		for _, match := range fuzzy.FindFrom(query, snippetSearchSource{docs: docs}) {
+			scores[match.Index] += 700 + match.Score
+		}
 	}
 
 	if len(scores) == 0 {
@@ -123,4 +146,40 @@ func readSnippetSearchContent(home string, snippet Snippet) string {
 	}
 
 	return string(content)
+}
+
+func searchQueryLocation(content, query string) (searchLocation, bool) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return searchLocation{}, false
+	}
+
+	contentRunes := []rune(content)
+	queryRunes := []rune(query)
+	if len(queryRunes) == 0 || len(queryRunes) > len(contentRunes) {
+		return searchLocation{}, false
+	}
+
+	lowerContent := lowerRunes(contentRunes)
+	lowerQuery := lowerRunes(queryRunes)
+
+	for i := 0; i <= len(lowerContent)-len(lowerQuery); i++ {
+		if !runesEqual(lowerContent[i:i+len(lowerQuery)], lowerQuery) {
+			continue
+		}
+
+		line, column := 1, 1
+		for _, r := range contentRunes[:i] {
+			if r == '\n' {
+				line++
+				column = 1
+				continue
+			}
+			column++
+		}
+
+		return searchLocation{line: line, column: column}, true
+	}
+
+	return searchLocation{}, false
 }
