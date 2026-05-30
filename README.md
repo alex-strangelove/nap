@@ -135,6 +135,8 @@ Install with Go:
 go install github.com/alex-strangelove/nap/cmd/nap@main
 ```
 
+Nap now requires **Go 1.24+**.
+
 Build from source on Debian/Ubuntu:
 
 ```sh
@@ -142,7 +144,7 @@ make apt-deps
 make build
 ```
 
-`make apt-deps` installs Go and `glow`, which Nap uses for Markdown previews.
+`make apt-deps` installs the distro `golang-go` package and `glow`, which Nap uses for Markdown previews. Make sure the installed Go toolchain is **1.24+**.
 
 Or download a binary from the [releases](https://github.com/maaslalani/nap/releases).
 
