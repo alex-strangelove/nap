@@ -1,23 +1,20 @@
 package nap
 
 import (
-	"bytes"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
+	"path/filepath"
 	"strings"
+
+	"github.com/charmbracelet/glamour"
 )
 
 const (
-	defaultEditor    = "nano"
-	searchEditor     = "hx"
-	defaultPreviewer = "glow"
-	defaultGlowStyle = "light"
+	defaultEditor        = "nano"
+	searchEditor         = "hx"
+	defaultMarkdownStyle = "auto"
 )
-
-var errPreviewerNotFound = errors.New("previewer not found")
 
 // Cmd returns a *exec.Cmd editing the given path with $EDITOR or nano if no
 // $EDITOR is set.
@@ -34,17 +31,6 @@ func searchEditorCmd(path string, line, column int) *exec.Cmd {
 	return exec.Command(searchEditor, target)
 }
 
-func previewCmd(width int) *exec.Cmd {
-	previewer, args := getPreviewer()
-	if filepathBase(previewer) == defaultPreviewer && !hasPreviewStyle(args) {
-		args = append(args, "-s", defaultGlowStyle)
-	}
-	if width > 0 {
-		args = append(args, "-w", strconv.Itoa(width))
-	}
-	return exec.Command(previewer, args...)
-}
-
 func getEditor() (string, []string) {
 	editor := strings.Fields(os.Getenv("EDITOR"))
 	if len(editor) > 0 {
@@ -53,32 +39,27 @@ func getEditor() (string, []string) {
 	return defaultEditor, nil
 }
 
-func getPreviewer() (string, []string) {
-	previewer := strings.Fields(os.Getenv("PREVIEWER"))
-	if len(previewer) > 0 {
-		return previewer[0], previewer[1:]
+func renderMarkdown(content string, width int, style string) (string, error) {
+	options := []glamour.TermRendererOption{
+		markdownStyleOption(style),
 	}
-	return defaultPreviewer, nil
-}
-
-func previewContent(content string, width int) (string, error) {
-	cmd := previewCmd(width)
-	cmd.Stdin = strings.NewReader(content)
-	cmd.Env = previewEnv()
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	out, err := cmd.Output()
-	if errors.Is(err, exec.ErrNotFound) {
-		return "", errPreviewerNotFound
+	if width > 0 {
+		options = append(options, glamour.WithWordWrap(width))
 	}
+
+	renderer, err := glamour.NewTermRenderer(options...)
 	if err != nil {
-		if stderr.Len() > 0 {
-			return "", fmt.Errorf("%s", strings.TrimSpace(stderr.String()))
-		}
 		return "", err
 	}
-	return string(out), nil
+
+	return renderer.Render(content)
+}
+
+func markdownStyleOption(style string) glamour.TermRendererOption {
+	if _, err := os.Stat(style); err == nil {
+		return glamour.WithStylePath(style)
+	}
+	return glamour.WithStandardStyle(style)
 }
 
 func isMarkdownLanguage(language string) bool {
@@ -90,37 +71,6 @@ func isMarkdownLanguage(language string) bool {
 	}
 }
 
-func hasPreviewStyle(args []string) bool {
-	for i, arg := range args {
-		if arg == "-s" || arg == "--style" {
-			return true
-		}
-		if strings.HasPrefix(arg, "--style=") {
-			return true
-		}
-		if strings.HasPrefix(arg, "-s=") {
-			return true
-		}
-		if arg == "-s" && i+1 < len(args) {
-			return true
-		}
-	}
-	return false
-}
-
 func filepathBase(path string) string {
-	parts := strings.Split(path, "/")
-	return parts[len(parts)-1]
-}
-
-func previewEnv() []string {
-	env := os.Environ()
-	env = append(env, "CLICOLOR_FORCE=1")
-	if os.Getenv("TERM") == "" {
-		env = append(env, "TERM=xterm-256color")
-	}
-	if os.Getenv("COLORTERM") == "" {
-		env = append(env, "COLORTERM=truecolor")
-	}
-	return env
+	return filepath.Base(path)
 }

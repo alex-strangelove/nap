@@ -144,7 +144,7 @@ make apt-deps
 make build
 ```
 
-`make apt-deps` installs the distro `golang-go` package and `glow`, which Nap uses for Markdown previews. Make sure the installed Go toolchain is **1.24+**.
+`make apt-deps` installs the distro `golang-go` package. Make sure the installed Go toolchain is **1.24+**.
 
 Or download a binary from the [releases](https://github.com/maaslalani/nap/releases).
 
@@ -159,6 +159,7 @@ home: ~/.nap
 default_language: go
 flashcards_enabled: true
 flashcards_command: hascard
+markdown_style: auto
 theme: nord
 
 # Colors
@@ -185,8 +186,8 @@ export NAP_HOME="~/.nap"
 export NAP_DEFAULT_LANGUAGE="go"
 export NAP_FLASHCARDS_ENABLED="false"
 export NAP_FLASHCARDS_COMMAND="hascard"
+export NAP_MARKDOWN_STYLE="tokyo-night"
 export NAP_THEME="nord"
-export PREVIEWER="/snap/bin/glow"
 
 # Colors
 export NAP_PRIMARY_COLOR="#AFBEE1"
@@ -200,6 +201,8 @@ export NAP_WHITE="#FFFFFF"
 ```
 
 Flashcards are enabled by default. `nap` treats a single `00-*.md` or `00-*.txt` file in a folder as that folder's flashcard deck. Use <kbd>f</kbd> to scaffold `00-cards.txt` from the bundled hascard template and <kbd>F</kbd> to review that folder's existing cards. Set `flashcards_enabled: false` or `NAP_FLASHCARDS_ENABLED=false` to turn the integration off.
+
+Markdown previews are rendered internally with Glamour. When `markdown_style` is `auto`, Nap derives `light` or `dark` from the configured Chroma `theme` so Markdown preview stays aligned with the rest of the app. Set `markdown_style` or `NAP_MARKDOWN_STYLE` to a built-in Glamour style such as `auto`, `dark`, `light`, `dracula`, or `tokyo-night` to override that behavior.
 
 <br />
 

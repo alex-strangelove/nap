@@ -238,6 +238,17 @@ func TestReadConfigFlashcardsEnvOverride(t *testing.T) {
 	}
 }
 
+func TestReadConfigMarkdownStyleEnvOverride(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("NAP_CONFIG", filepath.Join(tmp, "missing-config.yaml"))
+	t.Setenv("NAP_MARKDOWN_STYLE", "tokyo-night")
+
+	config := readConfig()
+	if config.MarkdownStyle != "tokyo-night" {
+		t.Fatalf("markdown_style env override mismatch: got %q", config.MarkdownStyle)
+	}
+}
+
 func TestReadConfigEnablesFlashcardsByDefault(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("NAP_CONFIG", filepath.Join(tmp, "missing-config.yaml"))
@@ -245,6 +256,16 @@ func TestReadConfigEnablesFlashcardsByDefault(t *testing.T) {
 	config := readConfig()
 	if !config.FlashcardsEnabled {
 		t.Fatal("flashcards should be enabled by default")
+	}
+}
+
+func TestReadConfigDefaultsMarkdownStyleToAuto(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("NAP_CONFIG", filepath.Join(tmp, "missing-config.yaml"))
+
+	config := readConfig()
+	if config.MarkdownStyle != defaultMarkdownStyle {
+		t.Fatalf("default markdown style mismatch: got %q", config.MarkdownStyle)
 	}
 }
 

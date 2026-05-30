@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/adrg/xdg"
+	chroma "github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/caarlos0/env/v6"
 	"gopkg.in/yaml.v3"
 )
@@ -23,6 +25,7 @@ type Config struct {
 	DefaultLanguage   string `env:"NAP_DEFAULT_LANGUAGE" yaml:"default_language"`
 	FlashcardsEnabled bool   `env:"NAP_FLASHCARDS_ENABLED" yaml:"flashcards_enabled"`
 	FlashcardsCommand string `env:"NAP_FLASHCARDS_COMMAND" yaml:"flashcards_command"`
+	MarkdownStyle     string `env:"NAP_MARKDOWN_STYLE" yaml:"markdown_style"`
 
 	Theme string `env:"NAP_THEME" yaml:"theme"`
 
@@ -47,6 +50,7 @@ func newConfig() Config {
 		DefaultLanguage:      defaultLanguage,
 		FlashcardsEnabled:    true,
 		FlashcardsCommand:    defaultFlashcardsCommand,
+		MarkdownStyle:        defaultMarkdownStyle,
 		Theme:                "dracula",
 		PrimaryColor:         "#AFBEE1",
 		PrimaryColorSubdued:  "#64708D",
@@ -103,8 +107,47 @@ func readConfig() Config {
 			config.Home = filepath.Join(home, config.Home[1:])
 		}
 	}
+	config.MarkdownStyle = config.markdownStyle()
 
 	return config
+}
+
+func (config Config) markdownStyle() string {
+	style := strings.TrimSpace(config.MarkdownStyle)
+	if style == "" {
+		return defaultMarkdownStyle
+	}
+	return style
+}
+
+func (config Config) effectiveMarkdownStyle() string {
+	style := config.markdownStyle()
+	if style != defaultMarkdownStyle {
+		return style
+	}
+	if chromaThemeIsLight(config.Theme) {
+		return "light"
+	}
+	return "dark"
+}
+
+func chromaThemeIsLight(theme string) bool {
+	style := styles.Get(theme)
+	if style == nil {
+		return false
+	}
+
+	background := style.Get(chroma.Background).Background
+	if background.IsSet() {
+		return background.Brightness() >= 0.5
+	}
+
+	text := style.Get(chroma.Text).Colour
+	if text.IsSet() {
+		return text.Brightness() < 0.5
+	}
+
+	return false
 }
 
 // writeConfig returns a configuration read from the environment.

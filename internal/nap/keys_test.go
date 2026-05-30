@@ -368,6 +368,18 @@ func TestUpdateContentUsesCachedRenderForMarkdown(t *testing.T) {
 	}
 }
 
+func TestContentKeyUsesEffectiveMarkdownStyle(t *testing.T) {
+	m := newTestModel()
+	m.config.Theme = "github"
+	m.config.MarkdownStyle = "auto"
+
+	key := m.contentKey(Snippet{Folder: defaultSnippetFolder, File: "preview.md", Language: "md"}, 40)
+
+	if key.markdownStyle != "light" {
+		t.Fatalf("markdown cache style mismatch: got %q want %q", key.markdownStyle, "light")
+	}
+}
+
 func TestContentPaneScrollSkipsFullPaneRefresh(t *testing.T) {
 	m := newTestModel()
 	m.pane = contentPane

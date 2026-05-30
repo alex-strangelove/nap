@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -66,36 +67,6 @@ func TestGetEditor(t *testing.T) {
 	}
 }
 
-func TestPreviewCmdUsesGlow(t *testing.T) {
-	if err := os.Unsetenv("PREVIEWER"); err != nil {
-		t.Fatalf("could not unset PREVIEWER: %v", err)
-	}
-
-	cmd := previewCmd(72)
-
-	if filepath.Base(cmd.Path) != defaultPreviewer {
-		t.Fatalf("previewer is incorrect: want %q but got %q", defaultPreviewer, cmd.Path)
-	}
-
-	wantArgs := fmt.Sprint([]string{defaultPreviewer, "-s", defaultGlowStyle, "-w", "72"})
-	if argStr := fmt.Sprint(cmd.Args); argStr != wantArgs {
-		t.Fatalf("previewer args are incorrect: want %q but got %q", wantArgs, argStr)
-	}
-}
-
-func TestPreviewCmdPreservesExplicitStyle(t *testing.T) {
-	if err := os.Setenv("PREVIEWER", "/snap/bin/glow -s light"); err != nil {
-		t.Fatalf("could not set PREVIEWER: %v", err)
-	}
-
-	cmd := previewCmd(72)
-
-	wantArgs := fmt.Sprint([]string{"/snap/bin/glow", "-s", "light", "-w", "72"})
-	if argStr := fmt.Sprint(cmd.Args); argStr != wantArgs {
-		t.Fatalf("previewer args are incorrect: want %q but got %q", wantArgs, argStr)
-	}
-}
-
 func TestSearchEditorCmdUsesHelixLocationTarget(t *testing.T) {
 	cmd := searchEditorCmd("plans/roadmap.md", 3, 7)
 
@@ -109,53 +80,53 @@ func TestSearchEditorCmdUsesHelixLocationTarget(t *testing.T) {
 	}
 }
 
-func TestGetPreviewer(t *testing.T) {
-	tt := []struct {
-		Name         string
-		PreviewerEnv string
-		Cmd          string
-		Args         []string
-	}{
-		{
-			Name: "default",
-			Cmd:  "glow",
-		},
-		{
-			Name:         "custom path",
-			PreviewerEnv: "/snap/bin/glow",
-			Cmd:          "/snap/bin/glow",
-		},
-		{
-			Name:         "custom path with flag",
-			PreviewerEnv: "/snap/bin/glow -s dark",
-			Cmd:          "/snap/bin/glow",
-			Args:         []string{"-s", "dark"},
-		},
+func TestRenderMarkdownUsesConfiguredStyle(t *testing.T) {
+	rendered, err := renderMarkdown("# Title\n\nHello **world**.", 72, "auto")
+	if err != nil {
+		t.Fatalf("renderMarkdown returned error: %v", err)
 	}
+	if !strings.Contains(rendered, "Title") || !strings.Contains(rendered, "world") {
+		t.Fatalf("rendered markdown is missing content: %q", rendered)
+	}
+}
 
-	for _, tc := range tt {
-		t.Run(tc.Name, func(t *testing.T) {
-			var err error
-			switch tc.PreviewerEnv {
-			case "":
-				err = os.Unsetenv("PREVIEWER")
-			default:
-				err = os.Setenv("PREVIEWER", tc.PreviewerEnv)
-			}
-			if err != nil {
-				t.Fatalf("could not (un)set PREVIEWER: %v", err)
-			}
+func TestRenderMarkdownRejectsUnknownStyle(t *testing.T) {
+	_, err := renderMarkdown("hello", 72, "missing-style")
+	if err == nil {
+		t.Fatal("expected renderMarkdown to fail for unknown style")
+	}
+	if !strings.Contains(err.Error(), "style not found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
 
-			cmd, args := getPreviewer()
+func TestEffectiveMarkdownStyleFollowsDarkTheme(t *testing.T) {
+	cfg := newConfig()
+	cfg.Theme = "dracula"
+	cfg.MarkdownStyle = "auto"
 
-			if cmd != tc.Cmd {
-				t.Fatalf("previewer is incorrect: want %q but got %q", tc.Cmd, cmd)
-			}
+	if got := cfg.effectiveMarkdownStyle(); got != "dark" {
+		t.Fatalf("effective markdown style mismatch: got %q want %q", got, "dark")
+	}
+}
 
-			if argStr, tcArgStr := fmt.Sprint(args), fmt.Sprint(tc.Args); argStr != tcArgStr {
-				t.Fatalf("previewer args are incorrect: want %q but got %q", tcArgStr, argStr)
-			}
-		})
+func TestEffectiveMarkdownStyleFollowsLightTheme(t *testing.T) {
+	cfg := newConfig()
+	cfg.Theme = "github"
+	cfg.MarkdownStyle = "auto"
+
+	if got := cfg.effectiveMarkdownStyle(); got != "light" {
+		t.Fatalf("effective markdown style mismatch: got %q want %q", got, "light")
+	}
+}
+
+func TestEffectiveMarkdownStylePreservesExplicitOverride(t *testing.T) {
+	cfg := newConfig()
+	cfg.Theme = "dracula"
+	cfg.MarkdownStyle = "tokyo-night"
+
+	if got := cfg.effectiveMarkdownStyle(); got != "tokyo-night" {
+		t.Fatalf("effective markdown style mismatch: got %q want %q", got, "tokyo-night")
 	}
 }
 

@@ -192,10 +192,11 @@ func (m *Model) allSnippets() []Snippet {
 }
 
 type contentCacheKey struct {
-	path     string
-	width    int
-	theme    string
-	markdown bool
+	path          string
+	width         int
+	theme         string
+	markdown      bool
+	markdownStyle string
 }
 
 type contentCacheEntry struct {
@@ -213,7 +214,6 @@ type contentRenderedMsg struct {
 	showCreateHint    bool
 	showNoContentHint bool
 	err               error
-	previewerMissing  bool
 	cacheKey          contentCacheKey
 	modTimeUnixNano   int64
 	size              int64
@@ -223,10 +223,11 @@ type refreshContentMsg struct{}
 
 func (m *Model) contentKey(snippet Snippet, width int) contentCacheKey {
 	return contentCacheKey{
-		path:     snippet.Path(),
-		width:    width,
-		theme:    m.config.Theme,
-		markdown: isMarkdownLanguage(snippet.Language),
+		path:          snippet.Path(),
+		width:         width,
+		theme:         m.config.Theme,
+		markdown:      isMarkdownLanguage(snippet.Language),
+		markdownStyle: m.config.effectiveMarkdownStyle(),
 	}
 }
 
@@ -297,10 +298,9 @@ func renderContent(config Config, snippet Snippet, width int, key contentCacheKe
 	}
 
 	if isMarkdownLanguage(snippet.Language) {
-		rendered, err := previewContent(string(content), width)
+		rendered, err := renderMarkdown(string(content), width, config.effectiveMarkdownStyle())
 		if err != nil {
 			msg.err = err
-			msg.previewerMissing = err == errPreviewerNotFound
 			return msg
 		}
 		msg.rendered = rendered
@@ -993,11 +993,7 @@ func (m *Model) applyContentView(msg contentRenderedMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if msg.err != nil {
-		if msg.previewerMissing {
-			m.displayError("Install glow to preview Markdown snippets.")
-		} else {
-			m.displayError(msg.err.Error())
-		}
+		m.displayError(msg.err.Error())
 		return m, nil
 	}
 
