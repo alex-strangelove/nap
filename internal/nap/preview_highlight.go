@@ -8,14 +8,29 @@ import (
 	"unicode/utf8"
 )
 
-const ansiResetBackground = "\x1b[49m"
+const (
+	ansiResetBackground          = "\x1b[49m"
+	ansiResetForeground          = "\x1b[39m"
+	selectedSearchHighlightColor = "#FF00FF"
+)
 
 type visibleRange struct {
 	start int
 	end   int
 }
 
-func highlightPreviewMatches(rendered, query string, config Config) string {
+type visibleHighlight struct {
+	start int
+	end   int
+	style highlightStyle
+}
+
+type highlightStyle struct {
+	start string
+	end   string
+}
+
+func highlightPreviewMatches(rendered, query string, config Config, selectedIndex int) string {
 	query = strings.TrimSpace(query)
 	if query == "" || rendered == "" {
 		return rendered
@@ -26,7 +41,25 @@ func highlightPreviewMatches(rendered, query string, config Config) string {
 		return rendered
 	}
 
-	return applyVisibleHighlights(rendered, ranges, searchHighlightStart(config))
+	defaultStyle := highlightStyle{
+		start: searchHighlightStart(config),
+		end:   ansiResetBackground,
+	}
+	selectedStyle := selectedSearchHighlightStyle(config)
+	highlights := make([]visibleHighlight, 0, len(ranges))
+	for i, r := range ranges {
+		style := defaultStyle
+		if i == selectedIndex {
+			style = selectedStyle
+		}
+		highlights = append(highlights, visibleHighlight{
+			start: r.start,
+			end:   r.end,
+			style: style,
+		})
+	}
+
+	return applyVisibleHighlights(rendered, highlights)
 }
 
 func visibleMatchRanges(rendered, query string) []visibleRange {
@@ -87,25 +120,26 @@ func runesEqual(left, right []rune) bool {
 	return true
 }
 
-func applyVisibleHighlights(rendered string, ranges []visibleRange, start string) string {
-	starts := make(map[int]int, len(ranges))
-	ends := make(map[int]int, len(ranges))
-	for _, r := range ranges {
-		starts[r.start]++
-		ends[r.end]++
+func applyVisibleHighlights(rendered string, highlights []visibleHighlight) string {
+	starts := make(map[int][]highlightStyle, len(highlights))
+	ends := make(map[int][]highlightStyle, len(highlights))
+	for _, highlight := range highlights {
+		starts[highlight.start] = append(starts[highlight.start], highlight.style)
+		ends[highlight.end] = append(ends[highlight.end], highlight.style)
 	}
 
 	var out strings.Builder
-	out.Grow(len(rendered) + len(ranges)*(len(start)+len(ansiResetBackground)))
+	out.Grow(len(rendered) + len(highlights)*16)
 
 	visibleIndex := 0
-	activeMatches := 0
+	activeHighlights := make([]highlightStyle, 0, 1)
+	activeSGR := make([]string, 0, 4)
 
 	for i := 0; i < len(rendered); {
-		if starts[visibleIndex] > 0 {
-			for j := 0; j < starts[visibleIndex]; j++ {
-				out.WriteString(start)
-				activeMatches++
+		if styles := starts[visibleIndex]; len(styles) > 0 {
+			for _, style := range styles {
+				out.WriteString(style.start)
+				activeHighlights = append(activeHighlights, style)
 			}
 			delete(starts, visibleIndex)
 		}
@@ -113,8 +147,11 @@ func applyVisibleHighlights(rendered string, ranges []visibleRange, start string
 		if seqLen := ansiSequenceLength(rendered[i:]); seqLen > 0 {
 			seq := rendered[i : i+seqLen]
 			out.WriteString(seq)
-			if activeMatches > 0 && seq[len(seq)-1] == 'm' {
-				out.WriteString(start)
+			if seq[len(seq)-1] == 'm' {
+				activeSGR = updateActiveSGR(activeSGR, seq)
+				for _, style := range activeHighlights {
+					out.WriteString(style.start)
+				}
 			}
 			i += seqLen
 			continue
@@ -125,18 +162,27 @@ func applyVisibleHighlights(rendered string, ranges []visibleRange, start string
 		i += size
 		visibleIndex++
 
-		if ends[visibleIndex] > 0 {
-			for j := 0; j < ends[visibleIndex]; j++ {
-				activeMatches--
-				out.WriteString(ansiResetBackground)
+		if styles := ends[visibleIndex]; len(styles) > 0 {
+			for _, style := range styles {
+				out.WriteString(style.end)
+			}
+			if len(activeHighlights) >= len(styles) {
+				activeHighlights = activeHighlights[:len(activeHighlights)-len(styles)]
+			} else {
+				activeHighlights = activeHighlights[:0]
+			}
+			for _, seq := range activeSGR {
+				out.WriteString(seq)
+			}
+			for _, style := range activeHighlights {
+				out.WriteString(style.start)
 			}
 			delete(ends, visibleIndex)
 		}
 	}
 
-	for activeMatches > 0 {
-		out.WriteString(ansiResetBackground)
-		activeMatches--
+	for i := len(activeHighlights) - 1; i >= 0; i-- {
+		out.WriteString(activeHighlights[i].styleEnd())
 	}
 
 	return out.String()
@@ -158,6 +204,29 @@ func ansiSequenceLength(s string) int {
 
 func searchHighlightStart(config Config) string {
 	color := strings.TrimSpace(config.SearchHighlightColor)
+	return ansiColor(color, 48)
+}
+
+func selectedSearchHighlightStyle(config Config) highlightStyle {
+	return highlightStyle{
+		start: ansiColor(config.WhiteColor, 38) + ansiColor(selectedSearchHighlightColor, 48),
+		end:   ansiResetForeground + ansiResetBackground,
+	}
+}
+
+func (h highlightStyle) styleEnd() string {
+	return h.end
+}
+
+func updateActiveSGR(active []string, seq string) []string {
+	if seq == "\x1b[m" || seq == "\x1b[0m" {
+		return active[:0]
+	}
+	return append(active, seq)
+}
+
+func ansiColor(color string, prefix int) string {
+	color = strings.TrimSpace(color)
 	if color == "" {
 		return ""
 	}
@@ -166,11 +235,11 @@ func searchHighlightStart(config Config) string {
 		g, errG := strconv.ParseUint(color[3:5], 16, 8)
 		b, errB := strconv.ParseUint(color[5:7], 16, 8)
 		if errR == nil && errG == nil && errB == nil {
-			return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
+			return fmt.Sprintf("\x1b[%d;2;%d;%d;%dm", prefix, r, g, b)
 		}
 	}
 	if index, err := strconv.Atoi(color); err == nil {
-		return fmt.Sprintf("\x1b[48;5;%dm", index)
+		return fmt.Sprintf("\x1b[%d;5;%dm", prefix, index)
 	}
 	return ""
 }

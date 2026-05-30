@@ -63,7 +63,7 @@ func newConfig() Config {
 		GrayColor:            "241",
 		BlackColor:           "#373b41",
 		WhiteColor:           "#FFFFFF",
-		SearchHighlightColor: "#FF8700",
+		SearchHighlightColor: "#00FFFF",
 	}
 }
 

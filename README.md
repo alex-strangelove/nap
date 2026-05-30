@@ -49,11 +49,11 @@ nap
 | Find in the current file and highlight matches in preview | <kbd>/</kbd> |
 | Search folders and file names | <kbd>S</kbd> |
 | Search file contents globally | <kbd>s</kbd> |
-| Move to the next search result | <kbd>ctrl+j</kbd> |
-| Move to the previous search result | <kbd>ctrl+k</kbd> |
+| Move to the next search result or occurrence | <kbd>ctrl+j</kbd> |
+| Move to the previous search result or occurrence | <kbd>ctrl+k</kbd> |
 | Focus search results during content search | <kbd>ctrl+h</kbd> |
 | Focus preview during content search | <kbd>ctrl+l</kbd> |
-| Open the current search match in Helix | <kbd>ctrl+e</kbd> |
+| Open the selected search match in Helix | <kbd>ctrl+e</kbd> |
 | Toggle help | <kbd>?</kbd> |
 | Quit application | <kbd>ctrl+c</kbd> |
 

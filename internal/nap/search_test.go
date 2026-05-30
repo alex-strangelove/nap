@@ -3,6 +3,7 @@ package nap
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,6 +13,19 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func runModelCmd(m *Model, cmd tea.Cmd) *Model {
+	for cmd != nil {
+		msg := cmd()
+		if msg == nil {
+			return m
+		}
+		updated, next := m.Update(msg)
+		m = updated.(*Model)
+		cmd = next
+	}
+	return m
+}
 
 func TestFindSnippetSearchesFileContents(t *testing.T) {
 	tmpHome(t)
@@ -182,6 +196,27 @@ func TestPreviewSearchModeKeepsCurrentSnippet(t *testing.T) {
 	}
 }
 
+func TestPreviewSearchModeKeepsCollapsedLayoutWhenStartedFromPreview(t *testing.T) {
+	m, _ := newSearchTestModel(t)
+	m.state = navigatingState
+	m.pane = contentPane
+	m.updatePaneLayout(100)
+
+	if m.Folders.Width() != 0 {
+		t.Fatalf("expected collapsed preview folder width before search, got %d", m.Folders.Width())
+	}
+
+	m = runModelCmd(m, m.enterSearchMode(previewSearchMode, false))
+	m.updatePaneLayout(100)
+
+	if m.Folders.Width() != 0 {
+		t.Fatalf("preview search should keep folder pane collapsed, got width %d", m.Folders.Width())
+	}
+	if m.Folders.Title != "" {
+		t.Fatalf("preview search should keep folder title hidden, got %q", m.Folders.Title)
+	}
+}
+
 func TestContentSearchModeHighlightsPreview(t *testing.T) {
 	m, _ := newSearchTestModel(t)
 	m.enterSearchMode(contentSearchMode, false)
@@ -225,6 +260,104 @@ func TestContentSearchModeFocusSwitchesBetweenResultsAndPreview(t *testing.T) {
 	got = updated.(*Model)
 	if got.pane != folderPane {
 		t.Fatalf("expected ctrl+h to focus search results, got pane %v", got.pane)
+	}
+}
+
+func TestPreviewSearchCtrlJKNavigatesOccurrences(t *testing.T) {
+	m, snippets := newSearchTestModel(t)
+	writeTestSnippetFile(t, m.config.Home, snippets[0], "match one\nmatch two\nmatch three\n")
+
+	m = runModelCmd(m, m.enterSearchMode(previewSearchMode, false))
+	m.searchInput.SetValue("match")
+	m = runModelCmd(m, m.refreshSearchResults())
+
+	loc, ok := m.selectedSearchLocation()
+	if !ok || loc.line != 1 || loc.column != 1 {
+		t.Fatalf("initial search location mismatch: got %#v", loc)
+	}
+	selectedStart := selectedSearchHighlightStyle(m.config).start
+	highlighted := m.previewContent("match one\nmatch two\nmatch three\n")
+	if got := highlightedVisibleIndexes(highlighted, selectedStart, ansiResetForeground+ansiResetBackground); !slices.Equal(got, []int{0, 1, 2, 3, 4}) {
+		t.Fatalf("initial selected highlight mismatch: got %v", got)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m = runModelCmd(updated.(*Model), cmd)
+	loc, ok = m.selectedSearchLocation()
+	if !ok || loc.line != 2 || loc.column != 1 {
+		t.Fatalf("ctrl+j location mismatch: got %#v want line 2 column 1", loc)
+	}
+	if m.Code.YOffset != 1 {
+		t.Fatalf("ctrl+j should scroll preview to second match: got %d want 1", m.Code.YOffset)
+	}
+	highlighted = m.previewContent("match one\nmatch two\nmatch three\n")
+	if got := highlightedVisibleIndexes(highlighted, selectedStart, ansiResetForeground+ansiResetBackground); !slices.Equal(got, []int{10, 11, 12, 13, 14}) {
+		t.Fatalf("ctrl+j should move selected highlight: got %v", got)
+	}
+
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	m = runModelCmd(updated.(*Model), cmd)
+	loc, ok = m.selectedSearchLocation()
+	if !ok || loc.line != 1 || loc.column != 1 {
+		t.Fatalf("ctrl+k location mismatch: got %#v want line 1 column 1", loc)
+	}
+}
+
+func TestContentSearchPreviewFocusCtrlJKNavigatesOccurrences(t *testing.T) {
+	m, snippets := newSearchTestModel(t)
+	writeTestSnippetFile(t, m.config.Home, snippets[0], "match one\nmatch two\nmatch three\n")
+	writeTestSnippetFile(t, m.config.Home, snippets[1], "package main\n")
+
+	m = runModelCmd(m, m.enterSearchMode(contentSearchMode, false))
+	m.searchInput.SetValue("match")
+	m = runModelCmd(m, m.refreshSearchResults())
+
+	selectedPath := m.selectedSnippet().Path()
+	if selectedPath != snippets[0].Path() {
+		t.Fatalf("expected initial content search selection to stay on %q, got %q", snippets[0].Path(), selectedPath)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
+	m = runModelCmd(updated.(*Model), cmd)
+	if m.pane != contentPane {
+		t.Fatalf("expected preview pane focus, got %v", m.pane)
+	}
+
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m = runModelCmd(updated.(*Model), cmd)
+	if got := m.selectedSnippet().Path(); got != selectedPath {
+		t.Fatalf("ctrl+j in preview focus should keep the selected file: got %q want %q", got, selectedPath)
+	}
+	loc, ok := m.selectedSearchLocation()
+	if !ok || loc.line != 2 || loc.column != 1 {
+		t.Fatalf("ctrl+j in preview focus should select second occurrence: got %#v", loc)
+	}
+}
+
+func TestSearchEditTargetUsesSelectedOccurrence(t *testing.T) {
+	m, snippets := newSearchTestModel(t)
+	writeTestSnippetFile(t, m.config.Home, snippets[0], "match one\nmatch two\nmatch three\n")
+
+	m = runModelCmd(m, m.enterSearchMode(previewSearchMode, false))
+	m.searchInput.SetValue("match")
+	m = runModelCmd(m, m.refreshSearchResults())
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m = runModelCmd(updated.(*Model), cmd)
+
+	path, line, column, ok := m.selectedSearchEditTarget()
+	if !ok {
+		t.Fatal("expected search edit target")
+	}
+	wantPath, err := snippetStoragePath(m.config.Home, snippets[0])
+	if err != nil {
+		t.Fatalf("could not derive snippet path: %v", err)
+	}
+	if path != wantPath {
+		t.Fatalf("search edit target path mismatch: got %q want %q", path, wantPath)
+	}
+	if line != 2 || column != 1 {
+		t.Fatalf("search edit target location mismatch: got %d:%d want 2:1", line, column)
 	}
 }
 

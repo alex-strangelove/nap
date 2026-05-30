@@ -149,19 +149,28 @@ func readSnippetSearchContent(home string, snippet Snippet) string {
 }
 
 func searchQueryLocation(content, query string) (searchLocation, bool) {
+	locations := searchQueryLocations(content, query)
+	if len(locations) == 0 {
+		return searchLocation{}, false
+	}
+	return locations[0], true
+}
+
+func searchQueryLocations(content, query string) []searchLocation {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return searchLocation{}, false
+		return nil
 	}
 
 	contentRunes := []rune(content)
 	queryRunes := []rune(query)
 	if len(queryRunes) == 0 || len(queryRunes) > len(contentRunes) {
-		return searchLocation{}, false
+		return nil
 	}
 
 	lowerContent := lowerRunes(contentRunes)
 	lowerQuery := lowerRunes(queryRunes)
+	locations := make([]searchLocation, 0)
 
 	for i := 0; i <= len(lowerContent)-len(lowerQuery); i++ {
 		if !runesEqual(lowerContent[i:i+len(lowerQuery)], lowerQuery) {
@@ -178,8 +187,8 @@ func searchQueryLocation(content, query string) (searchLocation, bool) {
 			column++
 		}
 
-		return searchLocation{line: line, column: column}, true
+		locations = append(locations, searchLocation{line: line, column: column})
 	}
 
-	return searchLocation{}, false
+	return locations
 }

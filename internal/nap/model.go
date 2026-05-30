@@ -112,6 +112,7 @@ type Model struct {
 	searchDirty       bool
 	searchRestorePane pane
 	searchMode        searchMode
+	searchMatchIndex  int
 }
 
 // Init initialzes the application model.
@@ -582,21 +583,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			searchResultNavigation := false
+			searchMatchNavigation := false
 			if key.Matches(msg, m.keys.SearchPrevious) {
 				searchResultNavigation = true
-				if m.searchMode == previewSearchMode {
-					msg = tea.KeyMsg{Type: tea.KeyUp}
+				if m.searchMode == previewSearchMode || (m.searchMode == contentSearchMode && m.pane == contentPane) {
+					searchMatchNavigation = true
 				} else {
 					msg = tea.KeyMsg{Type: tea.KeyUp}
 				}
 			}
 			if key.Matches(msg, m.keys.SearchNext) {
 				searchResultNavigation = true
-				if m.searchMode == previewSearchMode {
-					msg = tea.KeyMsg{Type: tea.KeyDown}
+				if m.searchMode == previewSearchMode || (m.searchMode == contentSearchMode && m.pane == contentPane) {
+					searchMatchNavigation = true
 				} else {
 					msg = tea.KeyMsg{Type: tea.KeyDown}
 				}
+			}
+			if searchMatchNavigation {
+				delta := 1
+				if key.Matches(msg, m.keys.SearchPrevious) {
+					delta = -1
+				}
+				if m.navigateSearchMatch(delta) {
+					return m, m.updateContent()
+				}
+				return m, nil
 			}
 
 			if !searchResultNavigation {
@@ -610,6 +622,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var cmd tea.Cmd
 				*m.searchResults, cmd = m.searchResults.Update(msg)
 				if selected, ok := m.selectedSearchSnippet(); ok && selected.Path() != previous {
+					m.searchMatchIndex = 0
 					return m, tea.Batch(cmd, m.updateContent())
 				}
 				return m, cmd
@@ -619,6 +632,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.searchInput, cmd = m.searchInput.Update(msg)
 			if m.searchInput.Value() != previousQuery {
+				m.searchMatchIndex = 0
 				return m, tea.Batch(cmd, m.refreshSearchResults())
 			}
 			return m, cmd
@@ -784,21 +798,23 @@ func (m *Model) editSnippet() tea.Cmd {
 	})
 }
 
-func (m *Model) editSearchSelection() tea.Cmd {
+func (m *Model) selectedSearchEditTarget() (string, int, int, bool) {
 	path := m.selectedSnippetFilePath()
 	if path == "" {
-		return nil
+		return "", 0, 0, false
 	}
 
 	line, column := 0, 0
-	query := strings.TrimSpace(m.searchInput.Value())
-	if (m.searchMode == previewSearchMode || m.searchMode == contentSearchMode) && query != "" {
-		content, err := os.ReadFile(path)
-		if err == nil {
-			if loc, ok := searchQueryLocation(string(content), query); ok {
-				line, column = loc.line, loc.column
-			}
-		}
+	if loc, ok := m.selectedSearchLocation(); ok {
+		line, column = loc.line, loc.column
+	}
+	return path, line, column, true
+}
+
+func (m *Model) editSearchSelection() tea.Cmd {
+	path, line, column, ok := m.selectedSearchEditTarget()
+	if !ok {
+		return nil
 	}
 
 	return tea.ExecProcess(searchEditorCmd(path, line, column), func(err error) tea.Msg {
@@ -1009,6 +1025,7 @@ func (m *Model) applyContentView(msg contentRenderedMsg) (tea.Model, tea.Cmd) {
 
 	m.writeLineNumbers(msg.lineCount)
 	m.Code.SetContent(m.previewContent(msg.rendered))
+	m.syncSearchPreviewToMatch()
 	return m, nil
 }
 
@@ -1017,7 +1034,7 @@ func (m *Model) previewContent(rendered string) string {
 	if !m.shouldHighlightPreview(query) || !m.selectedSnippetContainsQuery(query) {
 		return rendered
 	}
-	return highlightPreviewMatches(rendered, query, m.config)
+	return highlightPreviewMatches(rendered, query, m.config, m.searchMatchIndex)
 }
 
 func (m *Model) shouldHighlightPreview(query string) bool {
@@ -1141,7 +1158,13 @@ func (m *Model) foldersTitle() string {
 }
 
 func (m *Model) isCollapsedPreview() bool {
-	return m.pane == contentPane && m.state == navigatingState
+	if m.pane != contentPane {
+		return false
+	}
+	if m.state == navigatingState {
+		return true
+	}
+	return m.state == searchingState && m.searchMode == previewSearchMode && m.searchRestorePane == contentPane
 }
 
 func (m *Model) contentHeader() string {
@@ -1410,6 +1433,96 @@ func (m *Model) selectedSearchSnippet() (Snippet, bool) {
 	return snippet, ok
 }
 
+func (m *Model) currentSearchSnippet() (Snippet, bool) {
+	if m.state != searchingState {
+		return Snippet{}, false
+	}
+	switch m.searchMode {
+	case previewSearchMode:
+		snippet := m.selectedSnippet()
+		if snippet.Path() == "" {
+			return Snippet{}, false
+		}
+		return snippet, true
+	case contentSearchMode:
+		return m.selectedSearchSnippet()
+	default:
+		return Snippet{}, false
+	}
+}
+
+func (m *Model) currentSearchLocations() []searchLocation {
+	if m.state != searchingState {
+		return nil
+	}
+	query := strings.TrimSpace(m.searchInput.Value())
+	if query == "" {
+		return nil
+	}
+	snippet, ok := m.currentSearchSnippet()
+	if !ok {
+		return nil
+	}
+	content := readSnippetSearchContent(m.config.Home, snippet)
+	if content == "" {
+		return nil
+	}
+	return searchQueryLocations(content, query)
+}
+
+func (m *Model) normalizedSearchMatchIndex(count int) int {
+	if count <= 0 {
+		return 0
+	}
+	if m.searchMatchIndex < 0 {
+		return 0
+	}
+	if m.searchMatchIndex >= count {
+		return count - 1
+	}
+	return m.searchMatchIndex
+}
+
+func (m *Model) selectedSearchLocation() (searchLocation, bool) {
+	locations := m.currentSearchLocations()
+	if len(locations) == 0 {
+		return searchLocation{}, false
+	}
+	index := m.normalizedSearchMatchIndex(len(locations))
+	m.searchMatchIndex = index
+	return locations[index], true
+}
+
+func (m *Model) navigateSearchMatch(delta int) bool {
+	locations := m.currentSearchLocations()
+	if len(locations) == 0 {
+		m.searchMatchIndex = 0
+		return false
+	}
+	index := m.normalizedSearchMatchIndex(len(locations))
+	index = (index + delta + len(locations)) % len(locations)
+	m.searchMatchIndex = index
+	m.scrollSearchPreviewToLine(locations[index].line)
+	return true
+}
+
+func (m *Model) scrollSearchPreviewToLine(line int) {
+	offset := 0
+	if line > 1 {
+		offset = line - 1
+	}
+	m.Code.SetYOffset(offset)
+	m.LineNumbers.SetYOffset(offset)
+}
+
+func (m *Model) syncSearchPreviewToMatch() {
+	loc, ok := m.selectedSearchLocation()
+	if !ok {
+		return
+	}
+	m.scrollSearchPreviewToLine(loc.line)
+}
+
 // List returns the active list.
 func (m *Model) List() *list.Model {
 	folder := m.selectedFolder()
@@ -1423,6 +1536,7 @@ func (m *Model) List() *list.Model {
 
 func (m *Model) refreshSearchResults() tea.Cmd {
 	m.ensureSearchUI()
+	m.searchMatchIndex = 0
 	if m.searchMode == previewSearchMode {
 		return m.updateContent()
 	}
@@ -1479,6 +1593,7 @@ func (m *Model) enterSearchMode(mode searchMode, preserveQuery bool) tea.Cmd {
 	if !preserveQuery {
 		m.searchInput.SetValue("")
 	}
+	m.searchMatchIndex = 0
 	m.searchInput.CursorEnd()
 	m.updateKeyMap()
 	return tea.Batch(m.updateActivePane(changeStateMsg{newState: searchingState}), m.searchInput.Focus(), m.refreshSearchResults())
@@ -1488,6 +1603,7 @@ func (m *Model) exitSearchMode(applySelection bool) tea.Cmd {
 	selected, hasSelection := m.selectedSearchSnippet()
 	m.state = navigatingState
 	m.pane = m.searchRestorePane
+	m.searchMatchIndex = 0
 	m.searchInput.Blur()
 	m.updateKeyMap()
 	if applySelection && hasSelection {
