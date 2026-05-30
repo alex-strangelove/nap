@@ -1,0 +1,31 @@
+# Word or question
+Explanation or definition of this word, or the answer to the question.
+
+---
+
+# Multiple choice question, (only one answer is right)
+- Choice 1
+* Choice 2 (this is the correct answer)
+- Choice 3
+- Choice 4
+
+---
+
+# Multiple answer question
+[*] Option 1 (this is a correct answer)
+[ ] Option 2
+[*] Option 3 (this is a correct answer)
+[ ] Option 4
+
+---
+
+# Fill in the gaps
+The symbol EUR is for the currency named _Euro_, and is used in the _EU|European Union_.
+
+---
+
+# Order the letters in alphabetical order
+4. u
+1. l
+2. p
+3. s

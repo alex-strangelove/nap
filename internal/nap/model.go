@@ -2,6 +2,7 @@ package nap
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -317,6 +318,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyContentView(msg)
 	case refreshContentMsg:
 		return m, m.updateContent()
+	case flashcardsFinishedMsg:
+		if msg.err != nil {
+			m.displayError(flashcardsError(m.config, msg.err))
+			return m, nil
+		}
+		return m, m.updateContent()
 	case changeStateMsg:
 		m.List().SetDelegate(snippetDelegate{styles: m.ListStyle, state: msg.newState, compact: m.isCollapsedPreview()})
 
@@ -472,6 +479,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.NewSnippet):
 			m.state = creatingState
 			return m, m.createNewSnippetFile()
+		case key.Matches(msg, m.keys.CreateFlashcards):
+			m.state = creatingState
+			return m, m.createFlashcardDeck()
 		case key.Matches(msg, m.keys.NewFolder):
 			if m.pane != folderPane {
 				break
@@ -539,6 +549,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, changeState(deletingState)
 		case key.Matches(msg, m.keys.EditSnippet):
 			return m, m.editSnippet()
+		case key.Matches(msg, m.keys.ReviewFlashcards):
+			return m, m.reviewFlashcards()
 		case key.Matches(msg, m.keys.Search):
 			m.pane = folderPane
 		}
@@ -605,13 +617,33 @@ func (m *Model) editSnippet() tea.Cmd {
 }
 
 func (m *Model) noContentHints() []keyHint {
-	return []keyHint{
+	hints := []keyHint{
 		{m.keys.EditSnippet, "edit contents"},
 		{m.keys.PasteSnippet, "paste clipboard"},
 		{m.keys.RenameSnippet, "rename"},
 		{m.keys.SetFolder, "set folder"},
 		{m.keys.SetLanguage, "set language"},
 	}
+	if m.config.FlashcardsEnabled {
+		hints = append(hints, keyHint{m.keys.ReviewFlashcards, "review cards for this folder"})
+		if m.keys.CreateFlashcards.Enabled() {
+			hints = append(hints, keyHint{m.keys.CreateFlashcards, "create 00-cards from template"})
+		}
+	}
+	return hints
+}
+
+func (m *Model) createHints() []keyHint {
+	hints := []keyHint{
+		{m.keys.NewSnippet, "create a new snippet."},
+	}
+	if m.keys.CreateFlashcards.Enabled() {
+		hints = append(hints, keyHint{m.keys.CreateFlashcards, "create 00-cards from template."})
+	}
+	if m.keys.ReviewFlashcards.Enabled() {
+		hints = append(hints, keyHint{m.keys.ReviewFlashcards, "review cards for this folder."})
+	}
+	return hints
 }
 
 func (m *Model) folderDeletionTarget() (Folder, bool) {
@@ -732,6 +764,17 @@ func (m *Model) updateFolderTreeNavigation(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 
 		return nil, true
+	case "f":
+		if !m.keys.CreateFlashcards.Enabled() {
+			return nil, false
+		}
+		m.state = creatingState
+		return m.createFlashcardDeck(), true
+	case "F":
+		if !m.keys.ReviewFlashcards.Enabled() {
+			return nil, false
+		}
+		return m.reviewFlashcards(), true
 	default:
 		return nil, false
 	}
@@ -741,16 +784,12 @@ func (m *Model) updateFolderTreeNavigation(msg tea.KeyMsg) (tea.Cmd, bool) {
 // appropriate hints.
 func (m *Model) applyContentView(msg contentRenderedMsg) (tea.Model, tea.Cmd) {
 	if msg.showCreateHint {
-		m.displayKeyHint([]keyHint{
-			{m.keys.NewSnippet, "create a new snippet."},
-		})
+		m.displayKeyHint(m.createHints())
 		return m, nil
 	}
 
 	if len(m.List().Items()) <= 0 {
-		m.displayKeyHint([]keyHint{
-			{m.keys.NewSnippet, "create a new snippet."},
-		})
+		m.displayKeyHint(m.createHints())
 		return m, nil
 	}
 
@@ -1008,6 +1047,10 @@ func (m *Model) updateKeyMap() {
 	hasFolderItems := len(m.Folders.VisibleItems()) > 0
 	isFiltering := hasSelectedList && selectedList.FilterState() == list.Filtering
 	isEditing := m.state == editingState
+	deckCount := len(m.flashcardDecks(m.selectedFolder()))
+	flashcardsReady := m.config.FlashcardsEnabled && !isFiltering && !isEditing
+
+	m.keys.flashcardsEnabled = m.config.FlashcardsEnabled
 	_, snippetSelected := m.selectedFolderItem().(Snippet)
 	m.keys.DeleteSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing)
 	_, folderSelected := m.selectedFolderItem().(Folder)
@@ -1019,6 +1062,29 @@ func (m *Model) updateKeyMap() {
 	m.keys.NewFolder.SetEnabled(m.pane == folderPane && !isEditing)
 	m.keys.NewRootFolder.SetEnabled(m.pane == folderPane && !isEditing)
 	m.keys.ChangeFolder.SetEnabled(m.pane == folderPane)
+	m.keys.CreateFlashcards.SetEnabled(flashcardsReady && deckCount == 0)
+	m.keys.ReviewFlashcards.SetEnabled(flashcardsReady && deckCount == 1)
+}
+
+func (m *Model) flashcardDecks(folder Folder) []Snippet {
+	li, ok := m.Lists[folder]
+	if !ok || li == nil {
+		return nil
+	}
+
+	return flashcardDecks(li.Items())
+}
+
+func (m *Model) currentFlashcardDeck() (Snippet, error) {
+	decks := m.flashcardDecks(m.selectedFolder())
+	switch len(decks) {
+	case 0:
+		return Snippet{}, errFlashcardDeckMissing
+	case 1:
+		return decks[0], nil
+	default:
+		return Snippet{}, errFlashcardDeckAmbiguous
+	}
 }
 
 // selectedSnippet returns the currently selected snippet.
@@ -1099,12 +1165,118 @@ func (m *Model) createNewSnippetFile() tea.Cmd {
 	}
 }
 
+func (m *Model) createFlashcardDeck() tea.Cmd {
+	return func() tea.Msg {
+		deck, err := m.ensureFlashcardDeck()
+		if err != nil {
+			m.state = navigatingState
+			m.updateKeyMap()
+			if errors.Is(err, errFlashcardDeckAmbiguous) {
+				m.displayError("Multiple flashcard decks found in this folder.")
+				return m.updateFoldersForSelection(m.selectedFolderItem(), false)()
+			}
+			m.displayError(err.Error())
+			return m.updateFoldersForSelection(m.selectedFolderItem(), false)()
+		}
+		m.state = navigatingState
+		m.updateKeyMap()
+		return m.updateFoldersForSelection(deck, true)()
+	}
+}
+
+func (m *Model) ensureFlashcardDeck() (Snippet, error) {
+	folder := m.selectedFolder()
+	decks := m.flashcardDecks(folder)
+	switch len(decks) {
+	case 0:
+	case 1:
+		return decks[0], nil
+	default:
+		return Snippet{}, errFlashcardDeckAmbiguous
+	}
+
+	deck := Snippet{
+		Name:     defaultFlashcardDeckStem,
+		Date:     time.Now(),
+		File:     defaultFlashcardDeckStem + defaultFlashcardExtension,
+		Language: defaultFlashcardLanguage,
+		Tags:     []string{},
+		Folder:   string(folder),
+	}
+
+	path, err := snippetStoragePath(m.config.Home, deck)
+	if err != nil {
+		return Snippet{}, err
+	}
+
+	_ = os.MkdirAll(filepath.Dir(path), os.ModePerm)
+	if _, err := os.Stat(path); err == nil {
+		m.insertFlashcardDeck(folder, deck)
+		return deck, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Snippet{}, err
+	}
+
+	if err := os.WriteFile(path, []byte(defaultFlashcardDeckContent()), 0o644); err != nil {
+		return Snippet{}, err
+	}
+
+	m.insertFlashcardDeck(folder, deck)
+	return deck, nil
+}
+
+func (m *Model) insertFlashcardDeck(folder Folder, deck Snippet) {
+	li, ok := m.Lists[folder]
+	if !ok {
+		li = newList([]list.Item{}, m.height, m.ListStyle)
+		m.Lists[folder] = li
+	}
+	for _, item := range li.Items() {
+		snippet, ok := item.(Snippet)
+		if ok && snippet.File == deck.File {
+			m.selectSnippetInFolder(folder, snippet)
+			return
+		}
+	}
+	li.InsertItem(len(li.Items()), deck)
+	sortSnippetList(li)
+	m.selectSnippetInFolder(folder, deck)
+}
+
 func (m *Model) createNewFolder() tea.Cmd {
 	return m.createNewFolderAt(m.selectedFolder())
 }
 
 func (m *Model) createNewRootFolder() tea.Cmd {
 	return m.createNewFolderAt("")
+}
+
+func (m *Model) reviewFlashcards() tea.Cmd {
+	deck, err := m.currentFlashcardDeck()
+	if err != nil {
+		if errors.Is(err, errFlashcardDeckMissing) {
+			m.displayError("Flashcard deck not found in this folder.")
+			return nil
+		}
+		m.displayError("Multiple flashcard decks found in this folder.")
+		return nil
+	}
+
+	path, err := snippetStoragePath(m.config.Home, deck)
+	if err != nil {
+		m.displayError(err.Error())
+		return nil
+	}
+
+	cmd, err := flashcardsCmd(m.config, path)
+	if err != nil {
+		m.displayError(flashcardsError(m.config, err))
+		return nil
+	}
+
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return flashcardsFinishedMsg{err: err}
+	})
 }
 
 func (m *Model) createNewFolderAt(parent Folder) tea.Cmd {

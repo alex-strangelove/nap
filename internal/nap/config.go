@@ -20,7 +20,9 @@ type Config struct {
 	Home string `env:"NAP_HOME" yaml:"home"`
 	File string `env:"NAP_FILE" yaml:"file"`
 
-	DefaultLanguage string `env:"NAP_DEFAULT_LANGUAGE" yaml:"default_language"`
+	DefaultLanguage   string `env:"NAP_DEFAULT_LANGUAGE" yaml:"default_language"`
+	FlashcardsEnabled bool   `env:"NAP_FLASHCARDS_ENABLED" yaml:"flashcards_enabled"`
+	FlashcardsCommand string `env:"NAP_FLASHCARDS_COMMAND" yaml:"flashcards_command"`
 
 	Theme string `env:"NAP_THEME" yaml:"theme"`
 
@@ -42,6 +44,8 @@ func newConfig() Config {
 		Home:                defaultHome(),
 		File:                "snippets.json",
 		DefaultLanguage:     defaultLanguage,
+		FlashcardsEnabled:   true,
+		FlashcardsCommand:   defaultFlashcardsCommand,
 		Theme:               "dracula",
 		PrimaryColor:        "#AFBEE1",
 		PrimaryColorSubdued: "#64708D",

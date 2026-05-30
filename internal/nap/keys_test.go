@@ -94,6 +94,46 @@ func TestShortHelpIncludesDeleteSnippetAndRootFolderHintsWhenDisabled(t *testing
 	}
 }
 
+func TestFlashcardHintsHiddenWhenFeatureDisabled(t *testing.T) {
+	m := newTestModel()
+	m.config.FlashcardsEnabled = false
+	m.updateKeyMap()
+	m.help.Width = 200
+
+	view := m.help.ShortHelpView(m.keys.ShortHelp())
+	if strings.Contains(view, "new cards") || strings.Contains(view, "review cards") {
+		t.Fatalf("flashcard hints should be hidden when feature is disabled, got %q", view)
+	}
+}
+
+func TestFlashcardHintsShownWhenFeatureEnabled(t *testing.T) {
+	m := newTestModel()
+	m.config.FlashcardsEnabled = true
+	m.updateKeyMap()
+	m.help.Width = 200
+
+	view := m.help.ShortHelpView(m.keys.ShortHelp())
+	if !strings.Contains(view, "f") || !strings.Contains(view, "new cards") {
+		t.Fatalf("flashcard create hint missing from short help, got %q", view)
+	}
+	if !strings.Contains(view, "F") || !strings.Contains(view, "review cards") {
+		t.Fatalf("flashcard review hint missing from short help, got %q", view)
+	}
+}
+
+func TestReviewFlashcardsDisabledWithoutDeck(t *testing.T) {
+	m := newTestModel()
+	m.config.FlashcardsEnabled = true
+	m.updateKeyMap()
+
+	if !m.keys.CreateFlashcards.Enabled() {
+		t.Fatal("create flashcards key should be enabled without a deck")
+	}
+	if m.keys.ReviewFlashcards.Enabled() {
+		t.Fatal("review flashcards key should be disabled without a deck")
+	}
+}
+
 func TestEditingMetadataKeepsExpandedLeftColumns(t *testing.T) {
 	m := newTestModel()
 
@@ -765,6 +805,83 @@ func TestFolderPaneLowercaseNCreatesSnippetInSelectedRootFolder(t *testing.T) {
 	}
 	if snippet, ok := msg.items[2].(Snippet); !ok || snippet.Name != "02-new-snippet" {
 		t.Fatalf("expected new snippet in tree at index 2, got %T %v", msg.items[2], msg.items[2])
+	}
+}
+
+func TestFolderPaneLowercaseFCreatesFlashcardDeck(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newBoundIndexTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.pane = folderPane
+	m.folderExpanded[Folder("work")] = true
+	if err := os.MkdirAll(filepath.Join(tmp, "work"), 0o755); err != nil {
+		t.Fatalf("could not create folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "work", "01-index.md"), []byte{}, 0o644); err != nil {
+		t.Fatalf("could not write root index snippet: %v", err)
+	}
+	msg := m.updateFoldersView(Folder("work"), false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+	m.updateKeyMap()
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if cmd == nil {
+		t.Fatalf("expected flashcard creation command")
+	}
+
+	foldersMsg, ok := cmd().(updateFoldersMsg)
+	if !ok {
+		t.Fatalf("unexpected flashcard creation message type %T", cmd())
+	}
+
+	updated, _ = updated.(*Model).Update(foldersMsg)
+	got := updated.(*Model)
+	items := got.Lists[Folder("work")].Items()
+	if len(items) != 2 {
+		t.Fatalf("expected two snippets in root folder, got %d", len(items))
+	}
+	deck, ok := items[0].(Snippet)
+	if !ok {
+		t.Fatalf("expected flashcard deck snippet, got %T", items[0])
+	}
+	if deck.File != "00-cards.txt" {
+		t.Fatalf("flashcard deck file mismatch: got %q want %q", deck.File, "00-cards.txt")
+	}
+	selected, ok := got.selectedFolderItem().(Snippet)
+	if !ok || selected.File != "00-cards.txt" {
+		t.Fatalf("expected flashcard deck to be selected, got %T %v", got.selectedFolderItem(), got.selectedFolderItem())
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "work", "00-cards.txt")); err != nil {
+		t.Fatalf("flashcard deck was not created: %v", err)
+	}
+}
+
+func TestFolderPaneUppercaseFIgnoresMissingFlashcardDeck(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newBoundIndexTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.pane = folderPane
+	m.folderExpanded[Folder("work")] = true
+	if err := os.MkdirAll(filepath.Join(tmp, "work"), 0o755); err != nil {
+		t.Fatalf("could not create folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "work", "01-index.md"), []byte{}, 0o644); err != nil {
+		t.Fatalf("could not write root index snippet: %v", err)
+	}
+	msg := m.updateFoldersView(Folder("work"), false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+	m.updateKeyMap()
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'F'}})
+	if cmd != nil {
+		t.Fatalf("review key should not run without an existing deck")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "work", "00-cards.txt")); !os.IsNotExist(err) {
+		t.Fatalf("flashcard deck should not be created by review key, got err=%v", err)
 	}
 }
 

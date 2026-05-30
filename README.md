@@ -35,12 +35,14 @@ nap
 | Action | Key |
 | :--- | :--- |
 | Create a new snippet | <kbd>n</kbd> |
+| Create `00-cards.txt` in the selected folder | <kbd>f</kbd> |
+| Review the selected folder's flashcards (creates `00-cards.txt` if missing) | <kbd>F</kbd> |
 | Edit selected snippet (in `$EDITOR`) | <kbd>e</kbd> |
 | Copy selected snippet to clipboard | <kbd>c</kbd> |
 | Paste clipboard to selected snippet | <kbd>p</kbd> |
 | Delete selected snippet | <kbd>x</kbd> |
 | Rename selected snippet | <kbd>r</kbd> |
-| Set folder of selected snippet | <kbd>f</kbd> |
+| Set folder of selected snippet | <kbd>R</kbd> |
 | Set language of selected snippet | <kbd>L</kbd> |
 | Move to next pane | <kbd>l</kbd> |
 | Move to previous pane | <kbd>h</kbd> |
@@ -146,6 +148,8 @@ Nap is customized through a configuration file located at `NAP_CONFIG` (`$XDG_CO
 # Configuration
 home: ~/.nap
 default_language: go
+flashcards_enabled: true
+flashcards_command: hascard
 theme: nord
 
 # Colors
@@ -169,6 +173,8 @@ The configuration file can be overridden through environment variables:
 export NAP_CONFIG="~/.nap/config.yaml"
 export NAP_HOME="~/.nap"
 export NAP_DEFAULT_LANGUAGE="go"
+export NAP_FLASHCARDS_ENABLED="false"
+export NAP_FLASHCARDS_COMMAND="hascard"
 export NAP_THEME="nord"
 export PREVIEWER="/snap/bin/glow"
 
@@ -182,6 +188,8 @@ export NAP_BLACK="#373B41"
 export NAP_GRAY="240"
 export NAP_WHITE="#FFFFFF"
 ```
+
+Flashcards are enabled by default. `nap` treats a single `00-*.md` or `00-*.txt` file in a folder as that folder's flashcard deck. Use <kbd>f</kbd> to scaffold `00-cards.txt` from the bundled hascard template and <kbd>F</kbd> to review that folder's existing cards. Set `flashcards_enabled: false` or `NAP_FLASHCARDS_ENABLED=false` to turn the integration off.
 
 <br />
 
