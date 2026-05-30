@@ -55,6 +55,7 @@ type FoldersBaseStyle struct {
 // application.
 type ContentBaseStyle struct {
 	Base         lipgloss.Style
+	TitleBar     lipgloss.Style
 	Title        lipgloss.Style
 	Separator    lipgloss.Style
 	LineNumber   lipgloss.Style
@@ -118,16 +119,16 @@ func DefaultStyles(config Config) Styles {
 		},
 		Folders: FoldersStyle{
 			Focused: FoldersBaseStyle{
-				Base:       lipgloss.NewStyle().Width(22),
+				Base:       lipgloss.NewStyle().Width(22).Background(black),
 				Title:      lipgloss.NewStyle().Padding(0, 1).Foreground(white),
-				TitleBar:   lipgloss.NewStyle().Background(blue).Width(22-2).Margin(0, 1, 1, 1),
+				TitleBar:   lipgloss.NewStyle().Background(blue).Width(22),
 				Selected:   lipgloss.NewStyle().Foreground(brightBlue),
 				Unselected: lipgloss.NewStyle().Foreground(gray),
 			},
 			Blurred: FoldersBaseStyle{
-				Base:       lipgloss.NewStyle().Width(22),
+				Base:       lipgloss.NewStyle().Width(22).Background(black),
 				Title:      lipgloss.NewStyle().Padding(0, 1).Foreground(gray),
-				TitleBar:   lipgloss.NewStyle().Background(black).Width(22-2).Margin(0, 1, 1, 1),
+				TitleBar:   lipgloss.NewStyle().Background(black).Width(22),
 				Selected:   lipgloss.NewStyle().Foreground(brightBlue),
 				Unselected: lipgloss.NewStyle().Foreground(lipgloss.Color("237")),
 			},
@@ -135,6 +136,7 @@ func DefaultStyles(config Config) Styles {
 		Content: ContentStyle{
 			Focused: ContentBaseStyle{
 				Base:         lipgloss.NewStyle().Margin(0, 1),
+				TitleBar:     lipgloss.NewStyle().Background(blue).Foreground(white).Padding(0, 1),
 				Title:        lipgloss.NewStyle().Background(blue).Foreground(white).Margin(0, 0, 1, 1).Padding(0, 1),
 				Separator:    lipgloss.NewStyle().Foreground(white).Margin(0, 0, 1, 1),
 				LineNumber:   lipgloss.NewStyle().Foreground(brightBlack),
@@ -143,6 +145,7 @@ func DefaultStyles(config Config) Styles {
 			},
 			Blurred: ContentBaseStyle{
 				Base:         lipgloss.NewStyle().Margin(0, 1),
+				TitleBar:     lipgloss.NewStyle().Background(black).Foreground(gray).Padding(0, 1),
 				Title:        lipgloss.NewStyle().Background(black).Foreground(gray).Margin(0, 0, 1, 1).Padding(0, 1),
 				Separator:    lipgloss.NewStyle().Foreground(gray).Margin(0, 0, 1, 1),
 				LineNumber:   lipgloss.NewStyle().Foreground(black),

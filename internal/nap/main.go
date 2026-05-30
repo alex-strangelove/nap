@@ -438,6 +438,7 @@ func runInteractiveMode(config Config, snippets []Snippet) error {
 	folderList.Title = "Folders"
 
 	folderList.SetShowHelp(false)
+	folderList.SetShowTitle(false)
 	folderList.SetFilteringEnabled(false)
 	folderList.SetShowStatusBar(false)
 	folderList.DisableQuitKeybindings()

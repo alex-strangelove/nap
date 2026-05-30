@@ -171,6 +171,7 @@ func newTestModel() *Model {
 		children: tree.children,
 		snippets: tree.snippets,
 	}, 0, 0)
+	folderList.SetShowTitle(false)
 	folderList.Select(0)
 
 	m := &Model{
@@ -222,6 +223,7 @@ func newNestedFolderTestModel() *Model {
 		children: tree.children,
 		snippets: tree.snippets,
 	}, 0, 0)
+	folderList.SetShowTitle(false)
 	folderList.Select(0)
 
 	m := &Model{
@@ -350,6 +352,8 @@ func TestUpdateContentUsesCachedRenderForMarkdown(t *testing.T) {
 		rendered:        "cached preview",
 		lineCount:       2,
 	}
+	m.Folders.SetItems([]list.Item{snippet})
+	m.Folders.Select(0)
 
 	cmd := m.updateContent()
 	if cmd == nil {
@@ -1166,5 +1170,115 @@ func TestContentHeaderUsesSelectedFolderForParentNode(t *testing.T) {
 	}
 	if strings.Contains(header, defaultSnippet.String()) {
 		t.Fatalf("content header should not use default snippet placeholder for empty parent folders")
+	}
+}
+
+func TestSetFoldersWidthKeepsTitleBarFlushWithPane(t *testing.T) {
+	m := newTestModel()
+
+	m.setFoldersWidth(22)
+
+	if got := m.Folders.Styles.TitleBar.GetWidth(); got != 22 {
+		t.Fatalf("expected folder title bar width 22, got %d", got)
+	}
+}
+
+func TestContentHeaderRendersSingleLineTitleBar(t *testing.T) {
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	lines := strings.Split(strings.TrimRight(m.contentHeader(), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected single-line content header, got %d lines: %q", len(lines), lines)
+	}
+}
+
+func TestFoldersHeaderIsRenderedOutsideListView(t *testing.T) {
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	if header := m.leftPaneHeader(); !strings.Contains(header, "Folders") {
+		t.Fatalf("expected manual folders header, got %q", header)
+	}
+	if view := m.Folders.View(); strings.Contains(view, "Folders") {
+		t.Fatalf("expected folders list view without built-in title, got %q", view)
+	}
+}
+
+func TestFolderSelectionDisplaysDashboard(t *testing.T) {
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	cmd := m.updateContent()
+	if cmd == nil {
+		t.Fatal("expected dashboard update command")
+	}
+
+	updated, _ := m.Update(cmd())
+	got := updated.(*Model)
+	view := got.Code.View()
+	if !strings.Contains(view, "Folder dashboard") {
+		t.Fatalf("expected folder dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "folder      ") {
+		t.Fatalf("expected folder name in dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "snippets    1 root, 0 nested") {
+		t.Fatalf("expected snippet count in dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "modified    ") {
+		t.Fatalf("expected modified stat in dashboard, got %q", view)
+	}
+	if strings.Contains(view, "languages   ") {
+		t.Fatalf("did not expect languages stat in dashboard, got %q", view)
+	}
+}
+
+func TestEmptyFolderSelectionDisplaysDashboard(t *testing.T) {
+	m := newNestedFolderTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	cmd := m.updateContent()
+	if cmd == nil {
+		t.Fatal("expected dashboard update command")
+	}
+
+	updated, _ := m.Update(cmd())
+	got := updated.(*Model)
+	view := got.Code.View()
+	if !strings.Contains(view, "Folder dashboard") {
+		t.Fatalf("expected folder dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "folder      work") {
+		t.Fatalf("expected selected folder in dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "snippets    0 root, 1 nested") {
+		t.Fatalf("expected snippet count in dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "modified    ") {
+		t.Fatalf("expected modified stat in dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "flashcards  not configured") {
+		t.Fatalf("expected flashcards status in dashboard, got %q", view)
+	}
+}
+
+func TestFolderDashboardShowsFlashcardReadyStatus(t *testing.T) {
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	folder := Folder(defaultSnippetFolder)
+	m.Lists[folder].InsertItem(1, Snippet{
+		Name:     "00-cards",
+		Folder:   defaultSnippetFolder,
+		File:     "00-cards.txt",
+		Language: "txt",
+	})
+	sortSnippetList(m.Lists[folder])
+	m.updateKeyMap()
+	m.Lists[folder].Select(-1)
+
+	m.displayFolderDashboard()
+	if view := m.Code.View(); !strings.Contains(view, "flashcards  ready to review") {
+		t.Fatalf("expected ready flashcards status in dashboard, got %q", view)
 	}
 }

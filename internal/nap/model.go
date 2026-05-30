@@ -127,6 +127,7 @@ func (m *Model) Init() tea.Cmd {
 	m.ensureSearchUI()
 	m.rebuildFolderTree()
 
+	m.Folders.SetShowTitle(false)
 	m.Folders.Styles.Title = m.FoldersStyle.Title
 	m.Folders.Styles.TitleBar = m.FoldersStyle.TitleBar
 	m.updateKeyMap()
@@ -163,6 +164,19 @@ func (m *Model) configureSearchInput() {
 		m.searchInput.Prompt = "Text: "
 		m.searchInput.Placeholder = "file contents"
 	}
+
+	headerStyle := m.ContentStyle.TitleBar
+	if m.searchMode == previewSearchMode {
+		headerStyle = DefaultStyles(m.config).Content.Focused.TitleBar
+	}
+	headerBackground := headerStyle.GetBackground()
+	headerForeground := headerStyle.GetForeground()
+	headerInputStyle := lipgloss.NewStyle().Foreground(headerForeground).Background(headerBackground)
+
+	m.searchInput.PromptStyle = headerInputStyle
+	m.searchInput.TextStyle = headerInputStyle
+	m.searchInput.PlaceholderStyle = headerInputStyle
+	m.searchInput.Cursor.Style = lipgloss.NewStyle().Background(headerBackground).Foreground(headerForeground)
 }
 
 func (m *Model) invalidateSearchIndex() {
@@ -326,9 +340,14 @@ func renderContent(config Config, snippet Snippet, width int, key contentCacheKe
 //
 // This is useful after a Paste or Edit.
 func (m *Model) updateContent() tea.Cmd {
+	if m.shouldShowFolderDashboard() {
+		return func() tea.Msg {
+			return contentRenderedMsg{showNoContentHint: true}
+		}
+	}
 	if len(m.List().Items()) <= 0 {
 		return func() tea.Msg {
-			return contentRenderedMsg{showCreateHint: true}
+			return contentRenderedMsg{showNoContentHint: true}
 		}
 	}
 
@@ -994,6 +1013,11 @@ func (m *Model) applyContentView(msg contentRenderedMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if msg.showNoContentHint && m.shouldShowFolderDashboard() {
+		m.displayFolderDashboard()
+		return m, nil
+	}
+
 	if m.state != searchingState && len(m.List().Items()) <= 0 {
 		m.displayKeyHint(m.createHints())
 		return m, nil
@@ -1067,6 +1091,7 @@ type keyHint struct {
 // relevent key binding that the user should most likely press.
 func (m *Model) displayKeyHint(hints []keyHint) {
 	m.LineNumbers.SetContent(strings.Repeat("  ~ \n", len(hints)))
+	m.LineNumbers.SetYOffset(0)
 	var s strings.Builder
 	for _, hint := range hints {
 		s.WriteString(
@@ -1076,6 +1101,101 @@ func (m *Model) displayKeyHint(hints []keyHint) {
 			))
 	}
 	m.Code.SetContent(s.String())
+	m.Code.SetYOffset(0)
+}
+
+func (m *Model) shouldShowFolderDashboard() bool {
+	if m.state == searchingState {
+		return false
+	}
+	_, ok := m.selectedFolderItem().(Folder)
+	return ok
+}
+
+func (m *Model) displayFolderDashboard() {
+	folder := m.selectedFolder()
+	decks := m.flashcardDecks(folder)
+
+	rootSnippetCount := 0
+	nestedSnippetCount := 0
+	lastModified := time.Time{}
+	tagCount := 0
+	for listFolder, li := range m.Lists {
+		isRootFolder := listFolder == folder
+		isNestedFolder := strings.HasPrefix(string(listFolder), string(folder)+"/")
+		if !isRootFolder && !isNestedFolder {
+			continue
+		}
+		for _, item := range li.Items() {
+			snippet, ok := item.(Snippet)
+			if !ok {
+				continue
+			}
+			if isRootFolder {
+				rootSnippetCount++
+			} else {
+				nestedSnippetCount++
+			}
+			if path, err := snippetStoragePath(m.config.Home, snippet); err == nil {
+				if info, err := os.Stat(path); err == nil {
+					if info.ModTime().After(lastModified) {
+						lastModified = info.ModTime()
+					}
+				} else if snippet.Date.After(lastModified) {
+					lastModified = snippet.Date
+				}
+			} else if snippet.Date.After(lastModified) {
+				lastModified = snippet.Date
+			}
+			tagCount += len(snippet.Tags)
+		}
+	}
+
+	lastModifiedLabel := "unknown"
+	if !lastModified.IsZero() {
+		lastModifiedLabel = lastModified.Local().Format("2006-01-02 15:04")
+	}
+
+	flashcardsStatus := ""
+	if m.config.FlashcardsEnabled {
+		switch len(decks) {
+		case 0:
+			flashcardsStatus = "not configured"
+		case 1:
+			flashcardsStatus = "ready to review"
+		default:
+			flashcardsStatus = "multiple decks found"
+		}
+	} else if len(decks) > 0 {
+		flashcardsStatus = "deck present"
+	}
+
+	lines := []string{
+		m.ContentStyle.EmptyHint.Render("Folder dashboard"),
+		"",
+		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("folder      %s", folder)),
+		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("snippets    %d root, %d nested", rootSnippetCount, nestedSnippetCount)),
+		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("modified    %s", lastModifiedLabel)),
+		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("tags        %d", tagCount)),
+	}
+	if flashcardsStatus != "" {
+		lines = append(lines, m.ContentStyle.EmptyHint.Render(fmt.Sprintf("flashcards  %s", flashcardsStatus)))
+	}
+	if rootSnippetCount == 0 && nestedSnippetCount == 0 {
+		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("This folder is empty."))
+	}
+	lines = append(lines, "")
+	for _, hint := range m.createHints() {
+		lines = append(lines, fmt.Sprintf("%s %s",
+			m.ContentStyle.EmptyHintKey.Render(hint.binding.Help().Key),
+			m.ContentStyle.EmptyHint.Render("• "+hint.help),
+		))
+	}
+
+	m.LineNumbers.SetContent(strings.Repeat("  ~ \n", len(lines)))
+	m.LineNumbers.SetYOffset(0)
+	m.Code.SetContent(strings.Join(lines, "\n"))
+	m.Code.SetYOffset(0)
 }
 
 func (m *Model) previewWidth() int {
@@ -1114,7 +1234,7 @@ func (m *Model) updatePaneLayout(totalWidth int) {
 func (m *Model) setFoldersWidth(width int) {
 	m.Folders.SetWidth(width)
 	m.FoldersStyle.Base = m.FoldersStyle.Base.Width(width)
-	m.FoldersStyle.TitleBar = m.FoldersStyle.TitleBar.Width(maxWidth(width - 2))
+	m.FoldersStyle.TitleBar = m.FoldersStyle.TitleBar.Width(width)
 	m.Folders.Styles.TitleBar = m.FoldersStyle.TitleBar
 	m.Folders.Styles.Title = m.FoldersStyle.Title
 }
@@ -1168,64 +1288,60 @@ func (m *Model) isCollapsedPreview() bool {
 }
 
 func (m *Model) contentHeader() string {
+	renderTitleBar := func(style lipgloss.Style, content string) string {
+		return style.Width(maxWidth(m.previewWidth())).Render(content)
+	}
+
 	if m.state == editingState {
-		return lipgloss.JoinHorizontal(lipgloss.Left,
+		return renderTitleBar(m.ContentStyle.TitleBar, lipgloss.JoinHorizontal(lipgloss.Left,
 			m.inputs[folderInput].View(),
-			m.ContentStyle.Separator.Render("/"),
+			"/",
 			m.inputs[nameInput].View(),
-			m.ContentStyle.Separator.Render("."),
+			".",
 			m.inputs[languageInput].View(),
-		)
+		))
 	}
 
 	if m.state == deletingState {
 		if snippet, ok := m.selectedFolderItem().(Snippet); ok {
-			return m.ContentStyle.Title.Render(fmt.Sprintf("Delete %s? (y/N)", snippet.Name))
+			return renderTitleBar(m.ContentStyle.TitleBar, fmt.Sprintf("Delete %s? (y/N)", snippet.Name))
 		}
 		if folder, ok := m.folderDeletionTarget(); ok {
-			return m.ContentStyle.Title.Render(fmt.Sprintf("Delete %s? (y/N)", folderLabel(folder)))
+			return renderTitleBar(m.ContentStyle.TitleBar, fmt.Sprintf("Delete %s? (y/N)", folderLabel(folder)))
 		}
 	}
 
 	if m.state == searchingState && m.searchMode == previewSearchMode {
-		return lipgloss.JoinHorizontal(
-			lipgloss.Left,
-			m.ContentStyle.Title.Render("Find in file"),
-			m.ContentStyle.Separator.Render(" "),
-			m.searchInput.View(),
-		)
+		return renderTitleBar(DefaultStyles(m.config).Content.Focused.TitleBar, m.searchInput.View())
 	}
 
 	if selected, ok := m.selectedSearchSnippet(); ok {
-		if m.isCollapsedPreview() {
-			return m.ContentStyle.Title.Render(selected.String())
-		}
-		return lipgloss.JoinHorizontal(lipgloss.Left,
-			m.ContentStyle.Title.Render(selected.Folder),
-			m.ContentStyle.Separator.Render("/"),
-			m.ContentStyle.Title.Render(selected.Name),
-			m.ContentStyle.Separator.Render("."),
-			m.ContentStyle.Title.Render(selected.Language),
-		)
+		return renderTitleBar(m.ContentStyle.TitleBar, selected.String())
 	}
 
 	if selected, ok := m.selectedFolderItem().(Snippet); ok {
-		if m.isCollapsedPreview() {
-			return m.ContentStyle.Title.Render(selected.String())
-		}
-		return lipgloss.JoinHorizontal(lipgloss.Left,
-			m.ContentStyle.Title.Render(selected.Folder),
-			m.ContentStyle.Separator.Render("/"),
-			m.ContentStyle.Title.Render(selected.Name),
-			m.ContentStyle.Separator.Render("."),
-			m.ContentStyle.Title.Render(selected.Language),
-		)
+		return renderTitleBar(m.ContentStyle.TitleBar, selected.String())
 	}
 
 	if len(m.List().Items()) == 0 {
-		return m.ContentStyle.Title.Render(string(m.selectedFolder()))
+		return renderTitleBar(m.ContentStyle.TitleBar, string(m.selectedFolder()))
 	}
-	return m.ContentStyle.Title.Render(string(m.selectedFolder()))
+	return renderTitleBar(m.ContentStyle.TitleBar, string(m.selectedFolder()))
+}
+
+func (m *Model) leftPaneHeader() string {
+	if m.state == searchingState && m.searchMode != previewSearchMode && m.searchResults != nil {
+		return ""
+	}
+	title := m.foldersTitle()
+	if title == "" {
+		return ""
+	}
+	return m.FoldersStyle.TitleBar.
+		Foreground(m.FoldersStyle.Title.GetForeground()).
+		Padding(0, 1).
+		Width(maxWidth(m.FoldersStyle.Base.GetWidth())).
+		Render(title)
 }
 
 // displayError updates the content viewport with the error message provided.
@@ -1907,9 +2023,7 @@ func (m *Model) View() string {
 		return ""
 	}
 
-	var (
-		contentHeader = m.contentHeader()
-	)
+	contentHeader := m.contentHeader()
 
 	contentBody := lipgloss.JoinHorizontal(lipgloss.Left,
 		m.ContentStyle.LineNumber.Render(m.LineNumbers.View()),
@@ -1925,11 +2039,16 @@ func (m *Model) View() string {
 		)
 	}
 
+	leftPaneBody := m.leftPaneView()
+	if header := m.leftPaneHeader(); header != "" {
+		leftPaneBody = lipgloss.JoinVertical(lipgloss.Top, header, leftPaneBody)
+	}
+
 	return lipgloss.JoinVertical(
 		lipgloss.Top,
 		lipgloss.JoinHorizontal(
 			lipgloss.Left,
-			m.FoldersStyle.Base.Render(m.leftPaneView()),
+			m.FoldersStyle.Base.Render(leftPaneBody),
 			lipgloss.JoinVertical(lipgloss.Top,
 				contentHeader,
 				contentBody,

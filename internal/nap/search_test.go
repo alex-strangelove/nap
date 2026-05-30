@@ -196,6 +196,37 @@ func TestPreviewSearchModeKeepsCurrentSnippet(t *testing.T) {
 	}
 }
 
+func TestPreviewSearchHeaderDoesNotDuplicateLabel(t *testing.T) {
+	m, _ := newSearchTestModel(t)
+
+	m.enterSearchMode(previewSearchMode, false)
+	header := m.contentHeader()
+
+	if strings.Contains(header, "Find in file") {
+		t.Fatalf("expected preview search header without duplicated label, got %q", header)
+	}
+	if !strings.Contains(header, "Find: ") {
+		t.Fatalf("expected preview search header to keep input prompt, got %q", header)
+	}
+}
+
+func TestPreviewSearchInputUsesHeaderBackground(t *testing.T) {
+	m, _ := newSearchTestModel(t)
+
+	m.enterSearchMode(previewSearchMode, false)
+
+	want := DefaultStyles(m.config).Content.Focused.TitleBar.GetBackground()
+	if got := m.searchInput.PromptStyle.GetBackground(); got != want {
+		t.Fatalf("expected prompt background %q, got %q", want, got)
+	}
+	if got := m.searchInput.PlaceholderStyle.GetBackground(); got != want {
+		t.Fatalf("expected placeholder background %q, got %q", want, got)
+	}
+	if got := m.searchInput.Cursor.Style.GetBackground(); got != want {
+		t.Fatalf("expected cursor background %q, got %q", want, got)
+	}
+}
+
 func TestPreviewSearchModeKeepsCollapsedLayoutWhenStartedFromPreview(t *testing.T) {
 	m, _ := newSearchTestModel(t)
 	m.state = navigatingState
