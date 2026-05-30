@@ -26,6 +26,8 @@ type KeyMap struct {
 	NextPane          key.Binding
 	PreviousPane      key.Binding
 	ChangeFolder      key.Binding
+	SearchNext        key.Binding
+	SearchPrevious    key.Binding
 	flashcardsEnabled bool
 }
 
@@ -53,6 +55,8 @@ var DefaultKeyMap = KeyMap{
 	NextPane:         key.NewBinding(key.WithKeys("l", "tab", "right"), key.WithHelp("l", "left")),
 	PreviousPane:     key.NewBinding(key.WithKeys("h", "shift+tab", "left"), key.WithHelp("h", "right")),
 	ChangeFolder:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "change folder"), key.WithDisabled()),
+	SearchNext:       key.NewBinding(key.WithKeys("ctrl+j"), key.WithHelp("ctrl+j", "next result"), key.WithDisabled()),
+	SearchPrevious:   key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "prev result"), key.WithDisabled()),
 }
 
 // ShortHelp returns a quick help menu.

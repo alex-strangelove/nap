@@ -46,7 +46,7 @@ nap
 | Set language of selected snippet | <kbd>L</kbd> |
 | Move to next pane | <kbd>l</kbd> |
 | Move to previous pane | <kbd>h</kbd> |
-| Search for snippets | <kbd>/</kbd> |
+| Search snippets by folder, file, or contents | <kbd>/</kbd> |
 | Toggle help | <kbd>?</kbd> |
 | Quit application | <kbd>q</kbd> <kbd>ctrl+c</kbd> |
 
@@ -75,7 +75,7 @@ gh gist view 4ff8a6472247e6dd2315fd4038926522 | nap
 Output saved snippets:
 
 ```bash
-# Fuzzy find snippet.
+# Fuzzy find a snippet by path or file contents.
 nap fuzzy
 
 # Write snippet to a file.

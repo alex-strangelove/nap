@@ -77,13 +77,15 @@ func (d snippetDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		return
 	}
 
+	title := truncate.Truncate(s.Name, snippetTitleWidth(m.Width()), "...", truncate.PositionEnd)
+	subtitle := truncate.Truncate(s.Folder+" • "+humanizeTime(s.Date), snippetSubtitleWidth(m.Width()), "...", truncate.PositionEnd)
 	if index == m.Index() {
-		fmt.Fprintln(w, "  "+titleStyle.Render(truncate.Truncate(s.Name, 30, "...", truncate.PositionEnd)))
-		fmt.Fprint(w, "  "+subtitleStyle.Render(s.Folder+" • "+humanizeTime(s.Date)))
+		fmt.Fprintln(w, "  "+titleStyle.Render(title))
+		fmt.Fprint(w, "  "+subtitleStyle.Render(subtitle))
 		return
 	}
-	fmt.Fprintln(w, "  "+d.styles.UnselectedTitle.Render(truncate.Truncate(s.Name, 30, "...", truncate.PositionEnd)))
-	fmt.Fprint(w, "  "+d.styles.UnselectedSubtitle.Render(s.Folder+" • "+humanizeTime(s.Date)))
+	fmt.Fprintln(w, "  "+d.styles.UnselectedTitle.Render(title))
+	fmt.Fprint(w, "  "+d.styles.UnselectedSubtitle.Render(subtitle))
 }
 
 // Folder represents a group of snippets in a directory.
@@ -197,6 +199,20 @@ func treeTitleWidth(width int) int {
 		return 4
 	}
 	return width - 6
+}
+
+func snippetTitleWidth(width int) int {
+	if width <= 7 {
+		return 4
+	}
+	return width - 2
+}
+
+func snippetSubtitleWidth(width int) int {
+	if width <= 7 {
+		return 4
+	}
+	return width - 2
 }
 
 func folderLabel(folder Folder) string {

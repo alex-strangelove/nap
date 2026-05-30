@@ -50,6 +50,7 @@ const (
 	quittingState
 	editingState
 	editingTagsState
+	searchingState
 )
 
 type input int
@@ -88,15 +89,20 @@ type Model struct {
 	activeInput input
 	inputs      []textinput.Model
 	tagsInput   textinput.Model
+	searchInput textinput.Model
 	// the current active pane of focus.
 	pane pane
 	// the current state / action of the application.
 	state state
 	// stying for components
-	ListStyle    SnippetsBaseStyle
-	FoldersStyle FoldersBaseStyle
-	ContentStyle ContentBaseStyle
-	contentCache map[contentCacheKey]contentCacheEntry
+	ListStyle         SnippetsBaseStyle
+	FoldersStyle      FoldersBaseStyle
+	ContentStyle      ContentBaseStyle
+	contentCache      map[contentCacheKey]contentCacheEntry
+	searchResults     *list.Model
+	searchDocs        []snippetSearchDoc
+	searchDirty       bool
+	searchRestorePane pane
 }
 
 // Init initialzes the application model.
@@ -108,6 +114,7 @@ func (m *Model) Init() tea.Cmd {
 	if m.folderExpanded == nil {
 		m.folderExpanded = map[Folder]bool{}
 	}
+	m.ensureSearchUI()
 	m.rebuildFolderTree()
 
 	m.Folders.Styles.Title = m.FoldersStyle.Title
@@ -115,6 +122,50 @@ func (m *Model) Init() tea.Cmd {
 	m.updateKeyMap()
 
 	return m.updateContent()
+}
+
+func (m *Model) ensureSearchUI() {
+	if m.searchResults == nil {
+		m.searchResults = newList([]list.Item{}, m.height, DefaultStyles(m.config).Snippets.Focused)
+	}
+	if m.searchInput.Prompt == "" {
+		m.searchInput = newSearchInput()
+	}
+}
+
+func newSearchInput() textinput.Model {
+	input := textinput.New()
+	input.Prompt = "Search: "
+	input.Placeholder = "folders, files, contents"
+	input.CharLimit = 0
+	return input
+}
+
+func (m *Model) invalidateSearchIndex() {
+	m.searchDirty = true
+}
+
+func (m *Model) ensureSearchIndex() {
+	if !m.searchDirty && len(m.searchDocs) > 0 {
+		return
+	}
+	m.searchDocs = buildSnippetSearchDocs(m.config.Home, m.allSnippets())
+	m.searchDirty = false
+}
+
+func (m *Model) allSnippets() []Snippet {
+	var snippets []Snippet
+	for _, li := range m.Lists {
+		for _, item := range li.Items() {
+			snippet, ok := item.(Snippet)
+			if !ok {
+				continue
+			}
+			snippets = append(snippets, snippet)
+		}
+	}
+	sortSnippets(snippets)
+	return snippets
 }
 
 type contentCacheKey struct {
@@ -317,6 +368,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case contentRenderedMsg:
 		return m.applyContentView(msg)
 	case refreshContentMsg:
+		m.invalidateSearchIndex()
 		return m, m.updateContent()
 	case flashcardsFinishedMsg:
 		if msg.err != nil {
@@ -375,6 +427,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				_ = os.MkdirAll(filepath.Dir(newPath), os.ModePerm)
 				_ = os.Rename(m.selectedSnippetFilePath(), newPath)
+				m.invalidateSearchIndex()
 				setCmd := m.List().SetItem(i, snippet)
 				m.pane = contentPane
 				cmd = tea.Batch(setCmd, m.updateFoldersForSelection(Folder(snippet.Folder), false), m.updateContent())
@@ -390,6 +443,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			defer f.Close()
 			f.WriteString(content)
+			m.invalidateSearchIndex()
 			return m, changeState(navigatingState)
 		case deletingState:
 			m.state = deletingState
@@ -461,6 +515,60 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 			return m, tea.Batch(cmds...)
+		} else if m.state == searchingState {
+			if key.Matches(msg, m.keys.Quit) {
+				m.saveState()
+				m.state = quittingState
+				return m, tea.Quit
+			}
+			if key.Matches(msg, m.keys.ToggleHelp) {
+				m.help.ShowAll = !m.help.ShowAll
+
+				var newHeight int
+				if m.help.ShowAll {
+					newHeight = m.height - 4
+				} else {
+					newHeight = m.height
+				}
+				m.Folders.SetHeight(newHeight)
+				m.Code.Height = newHeight
+				m.LineNumbers.Height = newHeight
+				if m.searchResults != nil {
+					m.searchResults.SetHeight(newHeight)
+				}
+				return m, nil
+			}
+			if key.Matches(msg, m.keys.Cancel) {
+				return m, m.exitSearchMode(false)
+			}
+			if msg.String() == "enter" {
+				return m, m.exitSearchMode(true)
+			}
+
+			if key.Matches(msg, m.keys.SearchPrevious) {
+				msg = tea.KeyMsg{Type: tea.KeyUp}
+			}
+			if key.Matches(msg, m.keys.SearchNext) {
+				msg = tea.KeyMsg{Type: tea.KeyDown}
+			}
+
+			if msg.String() == "up" || msg.String() == "down" || msg.String() == "pgup" || msg.String() == "pgdown" || msg.String() == "home" || msg.String() == "end" {
+				previous := m.selectedSnippet().Path()
+				var cmd tea.Cmd
+				*m.searchResults, cmd = m.searchResults.Update(msg)
+				if selected, ok := m.selectedSearchSnippet(); ok && selected.Path() != previous {
+					return m, tea.Batch(cmd, m.updateContent())
+				}
+				return m, cmd
+			}
+
+			previousQuery := m.searchInput.Value()
+			var cmd tea.Cmd
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			if m.searchInput.Value() != previousQuery {
+				return m, tea.Batch(cmd, m.refreshSearchResults())
+			}
+			return m, cmd
 		}
 
 		if cmd, ok := m.updateFolderTreeNavigation(msg); ok {
@@ -516,6 +624,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Folders.SetHeight(newHeight)
 			m.Code.Height = newHeight
 			m.LineNumbers.Height = newHeight
+			if m.searchResults != nil {
+				m.searchResults.SetHeight(newHeight)
+			}
 		case key.Matches(msg, m.keys.SetFolder):
 			m.activeInput = folderInput
 			return m, changeState(editingState)
@@ -552,7 +663,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.ReviewFlashcards):
 			return m, m.reviewFlashcards()
 		case key.Matches(msg, m.keys.Search):
-			m.pane = folderPane
+			return m, m.enterSearchMode()
 		}
 	case tea.MouseMsg:
 		if cmd, ok := m.updateContentScroll(msg); ok {
@@ -788,7 +899,7 @@ func (m *Model) applyContentView(msg contentRenderedMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if len(m.List().Items()) <= 0 {
+	if m.state != searchingState && len(m.List().Items()) <= 0 {
 		m.displayKeyHint(m.createHints())
 		return m, nil
 	}
@@ -865,6 +976,7 @@ func (m *Model) updatePaneLayout(totalWidth int) {
 	folderWidth, snippetWidth := m.paneWidths()
 	m.setFoldersWidth(folderWidth)
 	m.setSnippetsWidth(snippetWidth)
+	m.setSearchWidth(folderWidth)
 
 	m.Folders.Title = m.foldersTitle()
 	m.LineNumbers.Width = 5
@@ -901,6 +1013,15 @@ func (m *Model) setSnippetsWidth(width int) {
 	}
 }
 
+func (m *Model) setSearchWidth(width int) {
+	if m.searchResults == nil {
+		return
+	}
+	m.searchResults.SetWidth(width)
+	m.searchResults.SetHeight(m.height)
+	m.searchInput.Width = maxWidth(width - len(m.searchInput.Prompt) - 2)
+}
+
 func (m *Model) foldersTitle() string {
 	if m.isCollapsedPreview() {
 		return ""
@@ -930,6 +1051,19 @@ func (m *Model) contentHeader() string {
 		if folder, ok := m.folderDeletionTarget(); ok {
 			return m.ContentStyle.Title.Render(fmt.Sprintf("Delete %s? (y/N)", folderLabel(folder)))
 		}
+	}
+
+	if selected, ok := m.selectedSearchSnippet(); ok {
+		if m.isCollapsedPreview() {
+			return m.ContentStyle.Title.Render(selected.String())
+		}
+		return lipgloss.JoinHorizontal(lipgloss.Left,
+			m.ContentStyle.Title.Render(selected.Folder),
+			m.ContentStyle.Separator.Render("/"),
+			m.ContentStyle.Title.Render(selected.Name),
+			m.ContentStyle.Separator.Render("."),
+			m.ContentStyle.Title.Render(selected.Language),
+		)
 	}
 
 	if selected, ok := m.selectedFolderItem().(Snippet); ok {
@@ -1020,6 +1154,10 @@ func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 	m.updatePaneLayout(m.width)
 	compact := m.isCollapsedPreview()
 	m.List().SetDelegate(snippetDelegate{styles: m.ListStyle, state: m.state, compact: compact})
+	if m.searchResults != nil {
+		searchStyles := DefaultStyles(m.config).Snippets.Focused
+		m.searchResults.SetDelegate(snippetDelegate{styles: searchStyles, state: navigatingState, compact: compact})
+	}
 	m.Folders.SetDelegate(folderDelegate{
 		styles:   m.FoldersStyle,
 		compact:  compact,
@@ -1047,23 +1185,27 @@ func (m *Model) updateKeyMap() {
 	hasFolderItems := len(m.Folders.VisibleItems()) > 0
 	isFiltering := hasSelectedList && selectedList.FilterState() == list.Filtering
 	isEditing := m.state == editingState
+	isSearching := m.state == searchingState
 	deckCount := len(m.flashcardDecks(m.selectedFolder()))
-	flashcardsReady := m.config.FlashcardsEnabled && !isFiltering && !isEditing
+	flashcardsReady := m.config.FlashcardsEnabled && !isFiltering && !isEditing && !isSearching
 
 	m.keys.flashcardsEnabled = m.config.FlashcardsEnabled
 	_, snippetSelected := m.selectedFolderItem().(Snippet)
-	m.keys.DeleteSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing)
+	m.keys.DeleteSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing && !isSearching)
 	_, folderSelected := m.selectedFolderItem().(Folder)
-	m.keys.DeleteFolder.SetEnabled(m.pane == folderPane && folderSelected && hasFolderItems && !isEditing)
-	m.keys.CopySnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing)
-	m.keys.PasteSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing)
-	m.keys.EditSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing)
-	m.keys.NewSnippet.SetEnabled(!isFiltering && !isEditing)
-	m.keys.NewFolder.SetEnabled(m.pane == folderPane && !isEditing)
-	m.keys.NewRootFolder.SetEnabled(m.pane == folderPane && !isEditing)
-	m.keys.ChangeFolder.SetEnabled(m.pane == folderPane)
+	m.keys.DeleteFolder.SetEnabled(m.pane == folderPane && folderSelected && hasFolderItems && !isEditing && !isSearching)
+	m.keys.CopySnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing && !isSearching)
+	m.keys.PasteSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing && !isSearching)
+	m.keys.EditSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing && !isSearching)
+	m.keys.NewSnippet.SetEnabled(!isFiltering && !isEditing && !isSearching)
+	m.keys.NewFolder.SetEnabled(m.pane == folderPane && !isEditing && !isSearching)
+	m.keys.NewRootFolder.SetEnabled(m.pane == folderPane && !isEditing && !isSearching)
+	m.keys.ChangeFolder.SetEnabled(m.pane == folderPane && !isSearching)
 	m.keys.CreateFlashcards.SetEnabled(flashcardsReady && deckCount == 0)
 	m.keys.ReviewFlashcards.SetEnabled(flashcardsReady && deckCount == 1)
+	m.keys.Search.SetEnabled(!isEditing && !isSearching)
+	m.keys.SearchNext.SetEnabled(isSearching)
+	m.keys.SearchPrevious.SetEnabled(isSearching)
 }
 
 func (m *Model) flashcardDecks(folder Folder) []Snippet {
@@ -1089,6 +1231,9 @@ func (m *Model) currentFlashcardDeck() (Snippet, error) {
 
 // selectedSnippet returns the currently selected snippet.
 func (m *Model) selectedSnippet() Snippet {
+	if snippet, ok := m.selectedSearchSnippet(); ok {
+		return snippet
+	}
 	if snippet, ok := m.selectedFolderItem().(Snippet); ok {
 		return snippet
 	}
@@ -1112,6 +1257,15 @@ func (m *Model) selectedFolderItem() list.Item {
 	return m.Folders.SelectedItem()
 }
 
+func (m *Model) selectedSearchSnippet() (Snippet, bool) {
+	if m.state != searchingState || m.searchResults == nil {
+		return Snippet{}, false
+	}
+	item := m.searchResults.SelectedItem()
+	snippet, ok := item.(Snippet)
+	return snippet, ok
+}
+
 // List returns the active list.
 func (m *Model) List() *list.Model {
 	folder := m.selectedFolder()
@@ -1121,6 +1275,60 @@ func (m *Model) List() *list.Model {
 
 	m.Lists[folder] = newList([]list.Item{}, m.height, m.ListStyle)
 	return m.Lists[folder]
+}
+
+func (m *Model) refreshSearchResults() tea.Cmd {
+	m.ensureSearchUI()
+	m.ensureSearchIndex()
+
+	currentPath := ""
+	if snippet, ok := m.selectedSearchSnippet(); ok {
+		currentPath = snippet.Path()
+	} else if snippet, ok := m.selectedFolderItem().(Snippet); ok {
+		currentPath = snippet.Path()
+	}
+
+	results := searchSnippetDocs(m.searchDocs, m.searchInput.Value())
+	items := make([]list.Item, 0, len(results))
+	selectedIndex := 0
+	for idx, snippet := range results {
+		items = append(items, snippet)
+		if snippet.Path() == currentPath {
+			selectedIndex = idx
+		}
+	}
+
+	setItemsCmd := m.searchResults.SetItems(items)
+	if len(items) == 0 {
+		m.searchResults.Select(0)
+		return tea.Batch(setItemsCmd, m.updateContent())
+	}
+
+	m.searchResults.Select(selectedIndex)
+	return tea.Batch(setItemsCmd, m.updateContent())
+}
+
+func (m *Model) enterSearchMode() tea.Cmd {
+	m.ensureSearchUI()
+	m.searchRestorePane = m.pane
+	m.state = searchingState
+	m.pane = folderPane
+	m.searchInput.SetValue("")
+	m.searchInput.CursorEnd()
+	m.updateKeyMap()
+	return tea.Batch(m.updateActivePane(changeStateMsg{newState: searchingState}), m.searchInput.Focus(), m.refreshSearchResults())
+}
+
+func (m *Model) exitSearchMode(applySelection bool) tea.Cmd {
+	selected, hasSelection := m.selectedSearchSnippet()
+	m.state = navigatingState
+	m.pane = m.searchRestorePane
+	m.searchInput.Blur()
+	m.updateKeyMap()
+	if applySelection && hasSelection {
+		return m.updateFoldersForSelection(selected, true)
+	}
+	return m.updateContent()
 }
 
 // createNewSnippet creates a new snippet file and adds it to the the list.
@@ -1159,6 +1367,7 @@ func (m *Model) createNewSnippetFile() tea.Cmd {
 		li.InsertItem(len(li.Items()), newSnippet)
 		sortSnippetList(li)
 		m.selectSnippetInFolder(Folder(folder), newSnippet)
+		m.invalidateSearchIndex()
 		m.state = navigatingState
 		m.updateKeyMap()
 		return m.updateFoldersForSelection(Folder(folder), true)()
@@ -1222,6 +1431,7 @@ func (m *Model) ensureFlashcardDeck() (Snippet, error) {
 	}
 
 	m.insertFlashcardDeck(folder, deck)
+	m.invalidateSearchIndex()
 	return deck, nil
 }
 
@@ -1314,6 +1524,7 @@ func (m *Model) createNewFolderAt(parent Folder) tea.Cmd {
 			m.folderExpanded = map[Folder]bool{}
 		}
 		m.folderExpanded[folder] = true
+		m.invalidateSearchIndex()
 		m.state = navigatingState
 		m.updateKeyMap()
 		return m.updateFoldersForSelection(snippet, true)()
@@ -1334,6 +1545,7 @@ func (m *Model) deleteSelectedSnippet() tea.Cmd {
 				break
 			}
 		}
+		m.invalidateSearchIndex()
 		m.state = navigatingState
 		m.updateKeyMap()
 		return m.updateFoldersForSelection(m.selectedFolder(), true)()
@@ -1365,6 +1577,7 @@ func (m *Model) deleteSelectedFolder() tea.Cmd {
 			delete(m.folderExpanded, folder)
 		}
 		delete(m.folderExpanded, target)
+		m.invalidateSearchIndex()
 		m.state = navigatingState
 		m.updateKeyMap()
 		return m.updateFoldersForSelection(fallback, true)()
@@ -1435,13 +1648,24 @@ func (m *Model) View() string {
 		lipgloss.Top,
 		lipgloss.JoinHorizontal(
 			lipgloss.Left,
-			m.FoldersStyle.Base.Render(m.Folders.View()),
+			m.FoldersStyle.Base.Render(m.leftPaneView()),
 			lipgloss.JoinVertical(lipgloss.Top,
 				contentHeader,
 				contentBody,
 			),
 		),
 		marginStyle.Render(m.help.View(m.keys)),
+	)
+}
+
+func (m *Model) leftPaneView() string {
+	if m.state != searchingState || m.searchResults == nil {
+		return m.Folders.View()
+	}
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.searchInput.View(),
+		m.searchResults.View(),
 	)
 }
 

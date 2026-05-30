@@ -20,7 +20,6 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/sahilm/fuzzy"
 )
 
 var (
@@ -61,7 +60,7 @@ func runCLI(args []string) {
 		case "-h", "--help":
 			fmt.Println(helpText)
 		default:
-			snippet := findSnippet(args[0], snippets)
+			snippet := findSnippet(config, args[0], snippets)
 			fmt.Print(snippet.Content(isatty.IsTerminal(os.Stdout.Fd())))
 		}
 		return
@@ -355,10 +354,11 @@ func listSnippets(snippets []Snippet) {
 	}
 }
 
-func findSnippet(search string, snippets []Snippet) Snippet {
-	matches := fuzzy.FindFrom(search, Snippets{snippets})
+func findSnippet(config Config, search string, snippets []Snippet) Snippet {
+	docs := buildSnippetSearchDocs(config.Home, snippets)
+	matches := searchSnippetDocs(docs, search)
 	if len(matches) > 0 {
-		return snippets[matches[0].Index]
+		return matches[0]
 	}
 	return Snippet{}
 }

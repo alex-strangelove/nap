@@ -420,6 +420,29 @@ func TestFolderTreeLongLabelsAreEllipsized(t *testing.T) {
 	}
 }
 
+func TestSnippetDelegateLongLabelsAreEllipsizedToListWidth(t *testing.T) {
+	m := newTestModel()
+	delegate := snippetDelegate{styles: m.ListStyle}
+	model := list.New([]list.Item{
+		Snippet{
+			Name:     "this-is-a-very-long-snippet-name-that-should-be-truncated",
+			Folder:   "this/is/a/very/long/folder/name/that/should/be/truncated",
+			File:     "this-is-a-very-long-snippet-name-that-should-be-truncated.md",
+			Language: "md",
+		},
+	}, delegate, 18, 2)
+
+	var out bytes.Buffer
+	delegate.Render(&out, model, 0, model.Items()[0])
+	rendered := out.String()
+	if !strings.Contains(rendered, "...") {
+		t.Fatalf("expected ellipsis in rendered snippet label, got %q", rendered)
+	}
+	if strings.Contains(rendered, "this/is/a/very/long/folder/name/that/should/be/truncated") {
+		t.Fatalf("expected subtitle truncation, got %q", rendered)
+	}
+}
+
 func TestCreateNewSnippetFileCreatesNestedFolderPath(t *testing.T) {
 	tmp := t.TempDir()
 	m := newTestModel()
