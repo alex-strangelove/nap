@@ -288,7 +288,10 @@ type contentRenderedMsg struct {
 	size              int64
 }
 
-type refreshContentMsg struct{}
+type externalRefreshMsg struct {
+	selectedPath   string
+	selectedFolder Folder
+}
 
 func (m *Model) contentKey(snippet Snippet, width int) contentCacheKey {
 	return contentCacheKey{
@@ -464,25 +467,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	case contentRenderedMsg:
 		return m.applyContentView(msg)
-	case refreshContentMsg:
+	case externalRefreshMsg:
 		m.invalidateSearchIndex()
-		return m, m.updateContent()
+		setItemsCmd := m.refreshFromDisk(msg.selectedPath, msg.selectedFolder)
+		m.updateKeyMap()
+		if m.state == searchingState {
+			return m, tea.Batch(setItemsCmd, m.refreshSearchResults())
+		}
+		return m, tea.Batch(setItemsCmd, m.updateContent())
 	case flashcardsFinishedMsg:
 		if msg.err != nil {
 			m.displayError(flashcardsError(m.config, msg.err))
 			return m, nil
 		}
+		setItemsCmd := m.refreshFromDisk("", msg.folder)
+		m.updateKeyMap()
 		if msg.preview {
-			if snippet, ok := m.selectedFolderItem().(Snippet); ok && msg.snippetPath == snippet.Path() {
-				m.pane = folderPane
-				m.updateKeyMap()
-				return m, tea.Batch(
-					m.updateActivePane(changeStateMsg{newState: m.state}),
-					m.updateFoldersForSelection(Folder(snippet.Folder), true),
-				)
-			}
+			m.pane = folderPane
+			return m, tea.Batch(
+				m.updateActivePane(changeStateMsg{newState: m.state}),
+				setItemsCmd,
+				m.updateContent(),
+			)
 		}
-		return m, m.updateContent()
+		return m, tea.Batch(setItemsCmd, m.updateContent())
 	case changeStateMsg:
 		m.List().SetDelegate(snippetDelegate{styles: m.ListStyle, state: msg.newState, compact: m.isCollapsedPreview()})
 
@@ -883,8 +891,13 @@ func (m *Model) previousPane() {
 
 // editSnippet opens the editor with the selected snippet file path.
 func (m *Model) editSnippet() tea.Cmd {
-	return tea.ExecProcess(editorCmd(m.selectedSnippetFilePath()), func(err error) tea.Msg {
-		return refreshContentMsg{}
+	path := m.selectedSnippetFilePath()
+	folder := m.selectedFolder()
+	return tea.ExecProcess(editorCmd(path), func(err error) tea.Msg {
+		return externalRefreshMsg{
+			selectedPath:   path,
+			selectedFolder: folder,
+		}
 	})
 }
 
@@ -906,9 +919,13 @@ func (m *Model) editSearchSelection() tea.Cmd {
 	if !ok {
 		return nil
 	}
+	folder := m.selectedFolder()
 
 	return tea.ExecProcess(searchEditorCmd(path, line, column), func(err error) tea.Msg {
-		return refreshContentMsg{}
+		return externalRefreshMsg{
+			selectedPath:   path,
+			selectedFolder: folder,
+		}
 	})
 }
 
@@ -996,6 +1013,86 @@ func (m *Model) updateFoldersView(selectedItem list.Item, refreshContent bool) t
 		selectedFolderIndex: selectedFolderIndex,
 		refreshContent:      refreshContent,
 	}
+}
+
+func (m *Model) allStoredSnippets() []Snippet {
+	var snippets []Snippet
+	for _, li := range m.Lists {
+		for _, item := range li.Items() {
+			snippet, ok := item.(Snippet)
+			if !ok {
+				continue
+			}
+			snippets = append(snippets, snippet)
+		}
+	}
+	sortSnippets(snippets)
+	return snippets
+}
+
+func listsForSnippets(snippets []Snippet, height int, styles SnippetsBaseStyle) map[Folder]*list.Model {
+	lists := map[Folder]*list.Model{}
+	for _, snippet := range snippets {
+		folder := Folder(snippet.Folder)
+		li, ok := lists[folder]
+		if !ok {
+			li = newList([]list.Item{}, height, styles)
+			lists[folder] = li
+		}
+		li.InsertItem(len(li.Items()), snippet)
+	}
+	for _, li := range lists {
+		sortSnippetList(li)
+	}
+	ensureAncestorLists(lists, height, styles)
+	return lists
+}
+
+func (m *Model) refreshFromDisk(selectedPath string, selectedFolder Folder) tea.Cmd {
+	snippets := scanSnippets(m.config, m.allStoredSnippets())
+	m.Lists = listsForSnippets(snippets, m.height, m.ListStyle)
+	m.rebuildFolderTree()
+	m.updatePaneLayout(m.width)
+
+	selectedItem := m.refreshedSelection(selectedPath, selectedFolder)
+	m.revealFolder(treeItemFolder(selectedItem))
+	items := m.folderTree.visibleItems(m.folderExpanded)
+	selectedFolderIndex := visibleFolderIndex(items, selectedItem, m.folderTree.parents)
+
+	setItemsCmd := m.Folders.SetItems(items)
+	m.Folders.Select(selectedFolderIndex)
+	m.syncSelectedTreeSnippet()
+	return setItemsCmd
+}
+
+func (m *Model) refreshedSelection(selectedPath string, selectedFolder Folder) list.Item {
+	if selectedPath != "" {
+		for _, li := range m.Lists {
+			for _, item := range li.Items() {
+				snippet, ok := item.(Snippet)
+				if ok && snippet.Path() == selectedPath {
+					return snippet
+				}
+			}
+		}
+	}
+
+	for folder := selectedFolder; folder != ""; {
+		if _, ok := m.Lists[folder]; ok {
+			return folder
+		}
+		parent, ok := parentFolder(folder)
+		if !ok {
+			break
+		}
+		folder = parent
+	}
+
+	if len(m.folderTree.roots) > 0 {
+		return m.folderTree.roots[0]
+	}
+
+	return nil
 }
 
 func (m *Model) rebuildFolderTree() {
@@ -1192,6 +1289,10 @@ func (s flashcardSummary) total() int {
 	return s.rootCount + s.nestedCount
 }
 
+func (s flashcardSummary) remainingCount() int {
+	return s.pendingCount + s.negativeCount
+}
+
 func (m *Model) collectFolderFlashcardSummary(folder Folder) flashcardSummary {
 	summary := flashcardSummary{}
 	for listFolder, li := range m.Lists {
@@ -1315,6 +1416,7 @@ func (m *Model) displayFolderDashboard() {
 		lines = append(lines, m.ContentStyle.EmptyHint.Render(
 			fmt.Sprintf("results     %d correct, %d incorrect, %d pending", flashcards.positiveCount, flashcards.negativeCount, flashcards.pendingCount),
 		))
+		lines = append(lines, m.ContentStyle.EmptyHint.Render(fmt.Sprintf("remaining   %d", flashcards.remainingCount())))
 	}
 	if rootSnippetCount == 0 && nestedSnippetCount == 0 {
 		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("This folder is empty."))
@@ -2063,6 +2165,7 @@ func (m *Model) runFlashcards(snippet Snippet, preview bool) tea.Cmd {
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return flashcardsFinishedMsg{
 			err:         err,
+			folder:      Folder(snippet.Folder),
 			snippetPath: snippet.Path(),
 			preview:     preview,
 		}

@@ -452,6 +452,44 @@ func TestContentPaneScrollSkipsFullPaneRefresh(t *testing.T) {
 	}
 }
 
+func TestExternalRefreshRescansVisibleTreeAfterEditorReturn(t *testing.T) {
+	tmp := t.TempDir()
+	m := newTestModel()
+	m.config.Home = tmp
+	m.folderExpanded[Folder(defaultSnippetFolder)] = true
+
+	selected := m.selectedSnippet()
+	writeTestSnippetFile(t, tmp, selected, "# existing\n")
+
+	msg := m.updateFoldersView(selected, false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+
+	added := Snippet{
+		Name:     "02-added",
+		Folder:   defaultSnippetFolder,
+		File:     "02-added.md",
+		Language: "md",
+	}
+	writeTestSnippetFile(t, tmp, added, "# added\n")
+
+	updated, cmd := m.Update(externalRefreshMsg{
+		selectedPath:   selected.Path(),
+		selectedFolder: Folder(selected.Folder),
+	})
+	got := runModelCmd(updated.(*Model), cmd)
+
+	if len(got.Lists[Folder(defaultSnippetFolder)].Items()) != 2 {
+		t.Fatalf("snippet list should rescan new files, got %d items", len(got.Lists[Folder(defaultSnippetFolder)].Items()))
+	}
+	if len(got.Folders.Items()) != 3 {
+		t.Fatalf("visible tree should include the new snippet, got %d items", len(got.Folders.Items()))
+	}
+	if snippet, ok := got.selectedFolderItem().(Snippet); !ok || snippet.Path() != selected.Path() {
+		t.Fatalf("selected snippet should stay focused after refresh, got %#v", got.selectedFolderItem())
+	}
+}
+
 func TestFolderTreeLongLabelsAreEllipsized(t *testing.T) {
 	m := newTestModel()
 	delegate := folderDelegate{
@@ -1366,6 +1404,9 @@ func TestFolderDashboardShowsFlashcardReadyStatus(t *testing.T) {
 	if view := m.Code.View(); !strings.Contains(view, "results     0 correct, 0 incorrect, 1 pending") {
 		t.Fatalf("expected flashcard result counts in dashboard, got %q", view)
 	}
+	if view := m.Code.View(); !strings.Contains(view, "remaining   1") {
+		t.Fatalf("expected remaining flashcard count in dashboard, got %q", view)
+	}
 }
 
 func TestFolderDashboardShowsResetFlashcardsHintForAnsweredDeck(t *testing.T) {
@@ -1420,6 +1461,12 @@ func TestFolderDashboardShowsResetFlashcardsHintForMixedDecks(t *testing.T) {
 	view := m.Code.View()
 	if !strings.Contains(view, "flashcards  ready + answered cards") {
 		t.Fatalf("expected mixed flashcard status in dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "results     1 correct, 1 incorrect, 1 pending") {
+		t.Fatalf("expected flashcard result counts in dashboard, got %q", view)
+	}
+	if !strings.Contains(view, "remaining   2") {
+		t.Fatalf("expected derived remaining count in dashboard, got %q", view)
 	}
 	if !strings.Contains(view, "z • reset answered cards to 00-cards.") {
 		t.Fatalf("expected reset hint for mixed decks in folder dashboard, got %q", view)

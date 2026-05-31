@@ -414,6 +414,56 @@ func TestPreviewFlashcardsReturnsToFolderNavigation(t *testing.T) {
 	}
 }
 
+func TestFlashcardsFinishedRefreshesRenamedDecksFromDisk(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	folder := Folder(defaultSnippetFolder)
+	deck := Snippet{
+		Name:     "00-cards",
+		Folder:   defaultSnippetFolder,
+		File:     "00-cards.txt",
+		Language: "txt",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte("# cards"), 0o644); err != nil {
+		t.Fatalf("could not write pending deck: %v", err)
+	}
+	m.Lists[folder] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{folder})
+	m.Folders.Select(0)
+	m.updateKeyMap()
+
+	renamedPath := filepath.Join(tmp, defaultSnippetFolder, "00-cards+.txt")
+	if err := os.Rename(filepath.Join(tmp, defaultSnippetFolder, deck.File), renamedPath); err != nil {
+		t.Fatalf("could not rename reviewed deck: %v", err)
+	}
+
+	updated, cmd := m.Update(flashcardsFinishedMsg{
+		folder:      folder,
+		snippetPath: deck.Path(),
+	})
+	got := runModelCmd(updated.(*Model), cmd)
+
+	decks := got.flashcardDecks(folder)
+	if len(decks) != 1 {
+		t.Fatalf("expected one flashcard deck after refresh, got %d", len(decks))
+	}
+	if decks[0].File != "00-cards+.txt" {
+		t.Fatalf("expected renamed deck to be reloaded from disk, got %q", decks[0].File)
+	}
+	if item, ok := got.selectedFolderItem().(Folder); !ok || item != folder {
+		t.Fatalf("expected refresh to focus folder dashboard, got %#v", got.selectedFolderItem())
+	}
+	if !got.keys.ResetFlashcards.Enabled() {
+		t.Fatal("expected reset flashcards to become available after reviewed deck refresh")
+	}
+}
+
 func TestFlashcardPreviewRelaunchesAfterReturningToPreview(t *testing.T) {
 	tmp := tmpHome(t)
 	m := newTestModel()

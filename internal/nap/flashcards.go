@@ -34,6 +34,7 @@ var defaultFlashcardDeckTemplate string
 
 type flashcardsFinishedMsg struct {
 	err         error
+	folder      Folder
 	snippetPath string
 	preview     bool
 }

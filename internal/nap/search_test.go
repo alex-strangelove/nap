@@ -392,6 +392,36 @@ func TestSearchEditTargetUsesSelectedOccurrence(t *testing.T) {
 	}
 }
 
+func TestExternalRefreshRebuildsSearchResultsAfterEditorReturn(t *testing.T) {
+	m, snippets := newSearchTestModel(t)
+	writeTestSnippetFile(t, m.config.Home, snippets[0], "shared term\n")
+	m = runModelCmd(m, m.enterSearchMode(contentSearchMode, false))
+	m.searchInput.SetValue("shared term")
+	m = runModelCmd(m, m.refreshSearchResults())
+
+	if len(m.searchResults.Items()) != 1 {
+		t.Fatalf("expected one initial search result, got %d", len(m.searchResults.Items()))
+	}
+
+	added := Snippet{
+		Name:     "shared",
+		Folder:   "plans",
+		File:     "shared.md",
+		Language: "md",
+	}
+	writeTestSnippetFile(t, m.config.Home, added, "shared term\n")
+
+	updated, cmd := m.Update(externalRefreshMsg{
+		selectedPath:   snippets[0].Path(),
+		selectedFolder: Folder(snippets[0].Folder),
+	})
+	m = runModelCmd(updated.(*Model), cmd)
+
+	if len(m.searchResults.Items()) != 2 {
+		t.Fatalf("expected external refresh to rebuild search results, got %d", len(m.searchResults.Items()))
+	}
+}
+
 func TestCtrlCQuitsFromSearch(t *testing.T) {
 	m, _ := newSearchTestModel(t)
 	m.enterSearchMode(contentSearchMode, false)
