@@ -46,6 +46,7 @@ func TestCreateFlashcardDeck(t *testing.T) {
 	m := newTestModel()
 	m.config.Home = tmp
 	m.config.FlashcardsEnabled = true
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m.updateKeyMap()
 
 	msg := m.createFlashcardDeck()()
@@ -281,15 +282,69 @@ func TestCreateThenDraftFlashcardFromSameSnippet(t *testing.T) {
 		t.Fatalf("expected deck to be selected after drafting, got %#v", selected)
 	}
 	deckPath := filepath.Join(tmp, defaultSnippetFolder, nativeFlashcardDeckStem+".md")
-	deck, err := readNativeFlashcardDeck(deckPath)
+	parsedDeck, err := readNativeFlashcardDeck(deckPath)
 	if err != nil {
 		t.Fatalf("expected created-and-drafted deck to stay valid, got %v", err)
 	}
-	if got := len(deck.Cards); got != 7 {
+	if got := len(parsedDeck.Cards); got != 7 {
 		t.Fatalf("expected default template plus one drafted card, got %d", got)
 	}
-	if deck.Cards[len(deck.Cards)-1].ID != "draft-boot-walk" {
-		t.Fatalf("unexpected drafted card id after create+draft: got %q", deck.Cards[len(deck.Cards)-1].ID)
+	if parsedDeck.Cards[len(parsedDeck.Cards)-1].ID != "draft-boot-walk" {
+		t.Fatalf("unexpected drafted card id after create+draft: got %q", parsedDeck.Cards[len(parsedDeck.Cards)-1].ID)
+	}
+}
+
+func TestDraftFlashcardFromFolderUsesFirstRegularSnippet(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+
+	folder := Folder(defaultSnippetFolder)
+	source := Snippet{
+		Name:     "boot-walk",
+		Folder:   defaultSnippetFolder,
+		File:     "boot-walk.go",
+		Language: "go",
+		Date:     time.Now(),
+	}
+	deck := Snippet{
+		Name:     nativeFlashcardDeckStem,
+		Folder:   defaultSnippetFolder,
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, source.File), []byte("fmt.Println(\"boot\")\n"), 0o644); err != nil {
+		t.Fatalf("could not write source snippet: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[folder] = newList([]list.Item{deck, source}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{folder})
+	m.Folders.Select(0)
+	m.updateKeyMap()
+
+	if !m.keys.DraftFlashcard.Enabled() {
+		t.Fatal("expected draft flashcard key to be enabled from folder dashboard")
+	}
+
+	got := runModelCmd(m, m.draftFlashcardFromSnippet())
+	selected := got.selectedSnippet()
+	if selected.File != nativeFlashcardDeckStem+".md" {
+		t.Fatalf("expected deck to be selected after folder draft, got %#v", selected)
+	}
+	deckPath := filepath.Join(tmp, defaultSnippetFolder, nativeFlashcardDeckStem+".md")
+	parsed, err := readNativeFlashcardDeck(deckPath)
+	if err != nil {
+		t.Fatalf("expected drafted deck to stay valid, got %v", err)
+	}
+	if parsed.Cards[len(parsed.Cards)-1].ID != "draft-boot-walk" {
+		t.Fatalf("unexpected draft id from folder flow: got %q", parsed.Cards[len(parsed.Cards)-1].ID)
 	}
 }
 
@@ -301,6 +356,36 @@ func TestVisibleLineOffsetForTextIgnoresANSI(t *testing.T) {
 	}
 	if offset != 1 {
 		t.Fatalf("unexpected offset: got %d want 1", offset)
+	}
+}
+
+func TestDraftFlashcardBannerIncludesSourceAndDeck(t *testing.T) {
+	m := newTestModel()
+	source := Snippet{Name: "01-index", Folder: defaultSnippetFolder, File: "01-index.md", Language: "md"}
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md"}
+
+	banner := stripANSIEscapedText(m.draftFlashcardBanner(source, deck))
+	if !strings.Contains(banner, "drafting") || !strings.Contains(banner, source.Path()) || !strings.Contains(banner, deck.Path()) {
+		t.Fatalf("expected banner to include source and deck paths, got %q", banner)
+	}
+}
+
+func TestClearDraftHighlightsMsgClearsTransientHighlightState(t *testing.T) {
+	m := newTestModel()
+	m.draftHighlightSource = "notes/01-index.md"
+	m.draftHighlightTarget = "notes/00-nap-cards.md"
+	m.draftHighlightClearScheduled = true
+
+	updated, cmd := m.Update(clearDraftHighlightsMsg{})
+	got := updated.(*Model)
+	if got.draftHighlightSource != "" || got.draftHighlightTarget != "" {
+		t.Fatalf("expected draft highlight paths to clear, got source=%q target=%q", got.draftHighlightSource, got.draftHighlightTarget)
+	}
+	if got.draftHighlightClearScheduled {
+		t.Fatal("expected draft highlight clear schedule flag to reset")
+	}
+	if cmd == nil {
+		t.Fatal("expected folder refresh command after clearing draft highlights")
 	}
 }
 

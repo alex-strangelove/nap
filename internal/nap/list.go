@@ -99,14 +99,16 @@ func (f Folder) FilterValue() string {
 
 // folderDelegate represents a folder list item.
 type folderDelegate struct {
-	styles     FoldersBaseStyle
-	compact    bool
-	home       string
-	depths     map[Folder]int
-	expanded   map[Folder]bool
-	children   map[Folder][]Folder
-	snippets   map[Folder][]Snippet
-	flashcards map[Folder][]Snippet
+	styles      FoldersBaseStyle
+	compact     bool
+	home        string
+	depths      map[Folder]int
+	expanded    map[Folder]bool
+	children    map[Folder][]Folder
+	snippets    map[Folder][]Snippet
+	flashcards  map[Folder][]Snippet
+	draftSource string
+	draftTarget string
 }
 
 // Height is the number of lines the folder list item takes up.
@@ -136,7 +138,15 @@ func (d folderDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		titleWidth := compactTitleWidth(m.Width())
 		label = truncate.Truncate(label, titleWidth, "...", truncate.PositionEnd)
 		if index == m.Index() {
+			if d.isDraftHighlighted(item) {
+				fmt.Fprint(w, " "+d.styles.Selected.Render(">")+label)
+				return
+			}
 			fmt.Fprint(w, " "+d.styles.Selected.Render(">"+label))
+			return
+		}
+		if d.isDraftHighlighted(item) {
+			fmt.Fprint(w, " "+d.styles.Unselected.Render(" ")+label)
 			return
 		}
 		fmt.Fprint(w, " "+d.styles.Unselected.Render(" "+label))
@@ -152,6 +162,7 @@ func (d folderDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		labelWidth = 1
 	}
 	label = truncate.Truncate(label, labelWidth, "...", truncate.PositionEnd)
+	label = d.highlightSnippetLabel(item, label)
 
 	style := d.styles.Unselected
 	prefix := "  "
@@ -161,7 +172,12 @@ func (d folderDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	}
 
 	fmt.Fprint(w, "  ")
-	fmt.Fprint(w, style.Render(prefix+label))
+	if d.isDraftHighlighted(item) {
+		fmt.Fprint(w, style.Render(prefix))
+		fmt.Fprint(w, label)
+	} else {
+		fmt.Fprint(w, style.Render(prefix+label))
+	}
 	if status == "" {
 		return
 	}
@@ -211,6 +227,26 @@ func (d folderDelegate) itemStatus(item list.Item) string {
 	}
 
 	return strings.Join(dots, " ")
+}
+
+func (d folderDelegate) highlightSnippetLabel(item list.Item, label string) string {
+	snippet, ok := item.(Snippet)
+	if !ok {
+		return label
+	}
+	switch snippet.Path() {
+	case d.draftSource:
+		return d.styles.FlashcardPending.Render(label)
+	case d.draftTarget:
+		return d.styles.FlashcardPositive.Render(label)
+	default:
+		return label
+	}
+}
+
+func (d folderDelegate) isDraftHighlighted(item list.Item) bool {
+	snippet, ok := item.(Snippet)
+	return ok && (snippet.Path() == d.draftSource || snippet.Path() == d.draftTarget)
 }
 
 const (

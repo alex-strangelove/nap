@@ -157,6 +157,53 @@ func TestDraftFlashcardDisabledForDeckSnippet(t *testing.T) {
 	}
 }
 
+func TestCreateHintsIncludeDraftFlashcardWhenEnabled(t *testing.T) {
+	m := newTestModel()
+	m.config.FlashcardsEnabled = true
+	snippet := defaultSnippet
+	m.Folders.SetItems([]list.Item{snippet})
+	m.Folders.Select(0)
+	m.selectSnippetInFolder(Folder(defaultSnippetFolder), snippet)
+	m.updateKeyMap()
+
+	var rendered []string
+	for _, hint := range m.createHints() {
+		rendered = append(rendered, hint.binding.Help().Key+" • "+hint.help)
+	}
+	view := strings.Join(rendered, "\n")
+	if !strings.Contains(view, "g • append draft card from snippet.") {
+		t.Fatalf("expected create hints to include draft flashcard action, got %q", view)
+	}
+}
+
+func TestFolderDashboardShowsDraftFlashcardHintWhenSnippetExists(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	folder := Folder(defaultSnippetFolder)
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()}
+	source := Snippet{Name: "01-index", Folder: defaultSnippetFolder, File: "01-index.md", Language: "md", Date: time.Now()}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, source.File), []byte("# index\n"), 0o644); err != nil {
+		t.Fatalf("could not write source snippet: %v", err)
+	}
+	m.Lists[folder] = newList([]list.Item{deck, source}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{folder})
+	m.Folders.Select(0)
+
+	m.displayFolderDashboard()
+	if view := m.Code.View(); !strings.Contains(view, "g • append draft card from snippet.") {
+		t.Fatalf("expected folder dashboard to show draft flashcard hint, got %q", view)
+	}
+}
+
 func TestReviewFlashcardsDisabledWithoutDeck(t *testing.T) {
 	m := newTestModel()
 	m.config.FlashcardsEnabled = true
@@ -1819,5 +1866,25 @@ func TestFolderTreeShowsDotForNativeFlashcardProgress(t *testing.T) {
 	delegate.Render(&out, model, 0, Folder("work"))
 	if rendered := out.String(); !strings.Contains(rendered, "●") {
 		t.Fatalf("expected native flashcard progress to render a dot, got %q", rendered)
+	}
+}
+
+func TestFolderTreeHighlightsDraftSourceAndTargetFilenames(t *testing.T) {
+	m := newTestModel()
+	source := Snippet{Name: "01-index", Folder: defaultSnippetFolder, File: "01-index.md", Language: "md"}
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md"}
+
+	delegate := folderDelegate{
+		styles:      m.FoldersStyle,
+		draftSource: source.Path(),
+		draftTarget: deck.Path(),
+	}
+	sourceLabel := "  • " + source.Name
+	if got, want := delegate.highlightSnippetLabel(source, sourceLabel), delegate.styles.FlashcardPending.Render(sourceLabel); got != want {
+		t.Fatalf("expected source snippet label to use pending style, got %q want %q", got, want)
+	}
+	deckLabel := "  • " + deck.Name
+	if got, want := delegate.highlightSnippetLabel(deck, deckLabel), delegate.styles.FlashcardPositive.Render(deckLabel); got != want {
+		t.Fatalf("expected deck label to use positive style, got %q want %q", got, want)
 	}
 }

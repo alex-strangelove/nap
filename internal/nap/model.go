@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	expandedFolderPaneWidth   = 32
+	expandedFolderPaneWidth   = 40
 	expandedSnippetPaneWidth  = 0
 	collapsedSnippetPaneWidth = 0
 	minContentPaneWidth       = 20
@@ -105,18 +105,22 @@ type Model struct {
 	// the current state / action of the application.
 	state state
 	// stying for components
-	ListStyle          SnippetsBaseStyle
-	FoldersStyle       FoldersBaseStyle
-	ContentStyle       ContentBaseStyle
-	contentCache       map[contentCacheKey]contentCacheEntry
-	searchResults      *list.Model
-	searchDocs         []snippetSearchDoc
-	searchDirty        bool
-	searchRestorePane  pane
-	searchMode         searchMode
-	searchMatchIndex   int
-	flashcardSession   *nativeFlashcardReviewSession
-	pendingContentJump string
+	ListStyle                    SnippetsBaseStyle
+	FoldersStyle                 FoldersBaseStyle
+	ContentStyle                 ContentBaseStyle
+	contentCache                 map[contentCacheKey]contentCacheEntry
+	searchResults                *list.Model
+	searchDocs                   []snippetSearchDoc
+	searchDirty                  bool
+	searchRestorePane            pane
+	searchMode                   searchMode
+	searchMatchIndex             int
+	flashcardSession             *nativeFlashcardReviewSession
+	pendingContentBanner         string
+	pendingContentJump           string
+	draftHighlightSource         string
+	draftHighlightTarget         string
+	draftHighlightClearScheduled bool
 }
 
 func (m *Model) replaceFlashcardDeck(folder Folder, current, replacement Snippet) {
@@ -296,6 +300,8 @@ type externalRefreshMsg struct {
 	selectedPath   string
 	selectedFolder Folder
 }
+
+type clearDraftHighlightsMsg struct{}
 
 func (m *Model) contentKey(snippet Snippet, width int) contentCacheKey {
 	return contentCacheKey{
@@ -484,6 +490,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(setItemsCmd, m.refreshSearchResults())
 		}
 		return m, tea.Batch(setItemsCmd, m.updateContent())
+	case clearDraftHighlightsMsg:
+		m.draftHighlightSource = ""
+		m.draftHighlightTarget = ""
+		m.draftHighlightClearScheduled = false
+		return m, m.updateFoldersForSelection(m.selectedFolderItem(), false)
 	case changeStateMsg:
 		m.List().SetDelegate(snippetDelegate{styles: m.ListStyle, state: msg.newState, compact: m.isCollapsedPreview()})
 
@@ -990,6 +1001,9 @@ func (m *Model) createHints() []keyHint {
 	hints := []keyHint{
 		{m.keys.NewSnippet, "create a new snippet."},
 	}
+	if m.keys.DraftFlashcard.Enabled() {
+		hints = append(hints, keyHint{m.keys.DraftFlashcard, "append draft card from snippet."})
+	}
 	if m.keys.CreateFlashcards.Enabled() {
 		hints = append(hints, keyHint{m.keys.CreateFlashcards, "create 00-nap-cards from template."})
 	}
@@ -1251,10 +1265,22 @@ func (m *Model) applyContentView(msg contentRenderedMsg) (tea.Model, tea.Cmd) {
 		lineCount:       msg.lineCount,
 	}
 
+	content := m.previewContent(msg.rendered)
+	if banner := m.pendingContentBanner; banner != "" {
+		content = banner + "\n\n" + content
+		msg.lineCount += lipgloss.Height(banner) + 1
+		m.pendingContentBanner = ""
+	}
 	m.writeLineNumbers(msg.lineCount)
-	m.Code.SetContent(m.previewContent(msg.rendered))
-	m.applyPendingContentJump(msg.rendered)
+	m.Code.SetContent(content)
+	m.applyPendingContentJump(content)
 	m.syncSearchPreviewToMatch()
+	if m.draftHighlightSource != "" && m.draftHighlightTarget != "" && !m.draftHighlightClearScheduled {
+		m.draftHighlightClearScheduled = true
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return clearDraftHighlightsMsg{}
+		})
+	}
 	return m, nil
 }
 
@@ -1756,14 +1782,16 @@ func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 		m.searchResults.SetDelegate(snippetDelegate{styles: searchStyles, state: navigatingState, compact: compact})
 	}
 	m.Folders.SetDelegate(folderDelegate{
-		styles:     m.FoldersStyle,
-		compact:    compact,
-		home:       m.config.Home,
-		depths:     m.folderTree.depths,
-		expanded:   m.folderExpanded,
-		children:   m.folderTree.children,
-		snippets:   m.folderTree.snippets,
-		flashcards: m.folderTree.flashcards,
+		styles:      m.FoldersStyle,
+		compact:     compact,
+		home:        m.config.Home,
+		depths:      m.folderTree.depths,
+		expanded:    m.folderExpanded,
+		children:    m.folderTree.children,
+		snippets:    m.folderTree.snippets,
+		flashcards:  m.folderTree.flashcards,
+		draftSource: m.draftHighlightSource,
+		draftTarget: m.draftHighlightTarget,
 	})
 	m.Folders.Styles.TitleBar = m.FoldersStyle.TitleBar
 	m.Folders.Styles.Title = m.FoldersStyle.Title
@@ -1791,7 +1819,8 @@ func (m *Model) updateKeyMap() {
 	selection := classifyFlashcardDecks(decks)
 
 	m.keys.flashcardsEnabled = m.config.FlashcardsEnabled
-	selectedSnippet, snippetSelected := m.selectedFolderItem().(Snippet)
+	_, snippetSelected := m.selectedFolderItem().(Snippet)
+	draftSource, draftReady := m.selectedDraftSource()
 	_, folderSelected := m.selectedFolderItem().(Folder)
 	m.keys.DeleteSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing && !isSearching && !isReviewing)
 	m.keys.DeleteFolder.SetEnabled(m.pane == folderPane && folderSelected && hasFolderItems && !isEditing && !isSearching && !isReviewing)
@@ -1803,7 +1832,7 @@ func (m *Model) updateKeyMap() {
 	m.keys.NewRootFolder.SetEnabled(m.pane == folderPane && !isEditing && !isSearching && !isReviewing)
 	m.keys.ChangeFolder.SetEnabled(m.pane == folderPane && !isSearching && !isReviewing)
 	m.keys.CreateFlashcards.SetEnabled(flashcardsReady && len(decks) == 0)
-	m.keys.DraftFlashcard.SetEnabled(flashcardsReady && snippetSelected && !isNativeFlashcardDeck(selectedSnippet))
+	m.keys.DraftFlashcard.SetEnabled(flashcardsReady && draftReady && !isNativeFlashcardDeck(draftSource))
 	_, reviewDeckErr := selection.reviewDeck()
 	m.keys.ReviewFlashcards.SetEnabled(flashcardsReady && reviewDeckErr == nil)
 	m.keys.ResetFlashcards.SetEnabled(flashcardsReady && m.canResetFlashcards(selection))
@@ -1867,6 +1896,31 @@ func (m *Model) selectedSnippet() Snippet {
 		return defaultSnippet
 	}
 	return item.(Snippet)
+}
+
+func (m *Model) selectedDraftSource() (Snippet, bool) {
+	if snippet, ok := m.selectedSearchSnippet(); ok && !isNativeFlashcardDeck(snippet) {
+		return snippet, true
+	}
+	if snippet, ok := m.selectedFolderItem().(Snippet); ok && !isNativeFlashcardDeck(snippet) {
+		return snippet, true
+	}
+	li, ok := m.Lists[m.selectedFolder()]
+	if !ok || li == nil {
+		return Snippet{}, false
+	}
+	if item := li.SelectedItem(); item != nil {
+		if snippet, ok := item.(Snippet); ok && !isNativeFlashcardDeck(snippet) {
+			return snippet, true
+		}
+	}
+	for _, item := range li.Items() {
+		snippet, ok := item.(Snippet)
+		if ok && !isNativeFlashcardDeck(snippet) {
+			return snippet, true
+		}
+	}
+	return Snippet{}, false
 }
 
 // selected folder returns the currently selected folder.
@@ -1982,6 +2036,15 @@ func (m *Model) applyPendingContentJump(rendered string) {
 		m.LineNumbers.SetYOffset(offset)
 	}
 	m.pendingContentJump = ""
+}
+
+func (m *Model) draftFlashcardBanner(source, deck Snippet) string {
+	return lipgloss.JoinHorizontal(lipgloss.Left,
+		m.ContentStyle.EmptyHint.Render("drafting "),
+		m.ContentStyle.EmptyHintKey.Render(source.Path()),
+		m.ContentStyle.EmptyHint.Render(" → "),
+		m.ContentStyle.FlashcardPositive.Render(deck.Path()),
+	)
 }
 
 func visibleLineOffsetForText(rendered string, text string) (int, bool) {
@@ -2224,8 +2287,8 @@ func (m *Model) ensureFlashcardDeck() (Snippet, error) {
 
 func (m *Model) draftFlashcardFromSnippet() tea.Cmd {
 	return func() tea.Msg {
-		source := m.selectedSnippet()
-		if source.Path() == "" || isNativeFlashcardDeck(source) {
+		source, ok := m.selectedDraftSource()
+		if !ok || source.Path() == "" || isNativeFlashcardDeck(source) {
 			m.state = navigatingState
 			m.updateKeyMap()
 			return m.updateFoldersForSelection(m.selectedFolderItem(), false)()
@@ -2275,7 +2338,11 @@ func (m *Model) draftFlashcardFromSnippet() tea.Cmd {
 		m.state = navigatingState
 		m.updateKeyMap()
 		m.invalidateSearchIndex()
+		m.pendingContentBanner = m.draftFlashcardBanner(source, deck)
 		m.pendingContentJump = source.Path()
+		m.draftHighlightSource = source.Path()
+		m.draftHighlightTarget = deck.Path()
+		m.draftHighlightClearScheduled = false
 		return m.updateFoldersForSelection(deck, true)()
 	}
 }
