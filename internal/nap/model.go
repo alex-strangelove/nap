@@ -605,11 +605,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			case key.Matches(msg, m.keys.Cancel):
 				return m, m.stopNativeFlashcardReview()
-			case msg.String() == " " || msg.String() == "enter":
-				if m.flashcardSession != nil {
-					m.flashcardSession.Revealed = true
+			case msg.String() == "up" || msg.String() == "k":
+				return m, m.moveNativeFlashcardSelection(-1)
+			case msg.String() == "down" || msg.String() == "j":
+				return m, m.moveNativeFlashcardSelection(1)
+			case msg.String() == " ":
+				if m.flashcardSession != nil && m.flashcardSession.currentCard().Type == nativeFlashcardTypeMultiChoice && m.flashcardSession.Phase == nativeFlashcardPhaseQuestion {
+					return m, m.toggleNativeFlashcardSelection()
 				}
-				return m, m.updateContent()
+				return m, m.submitNativeFlashcardAnswer()
+			case msg.String() == "enter":
+				return m, m.submitNativeFlashcardAnswer()
 			case msg.String() == "1":
 				return m, m.gradeNativeFlashcard(flashcardGradeAgain)
 			case msg.String() == "2":
@@ -1304,16 +1310,13 @@ type flashcardSummary struct {
 	rootCount     int
 	nestedCount   int
 	pendingCount  int
+	recallCount   int
 	positiveCount int
 	negativeCount int
 }
 
 func (s flashcardSummary) total() int {
 	return s.rootCount + s.nestedCount
-}
-
-func (s flashcardSummary) remainingCount() int {
-	return s.pendingCount + s.negativeCount
 }
 
 func (m *Model) collectFolderFlashcardSummary(folder Folder) flashcardSummary {
@@ -1352,6 +1355,7 @@ func (m *Model) collectFolderFlashcardSummary(folder Folder) flashcardSummary {
 					summary.nestedCount += nativeSummary.rootCount
 				}
 				summary.pendingCount += nativeSummary.pendingCount
+				summary.recallCount += nativeSummary.recallCount
 				summary.positiveCount += nativeSummary.positiveCount
 				summary.negativeCount += nativeSummary.negativeCount
 				continue
@@ -1365,6 +1369,8 @@ func (m *Model) collectFolderFlashcardSummary(folder Folder) flashcardSummary {
 
 			switch state, ok := flashcardDeckStateForSnippet(snippet); {
 			case !ok:
+			case state == flashcardDeckRecall:
+				summary.recallCount++
 			case state == flashcardDeckPositive:
 				summary.positiveCount++
 			case state == flashcardDeckNegative:
@@ -1376,6 +1382,19 @@ func (m *Model) collectFolderFlashcardSummary(folder Folder) flashcardSummary {
 	}
 
 	return summary
+}
+
+func (m *Model) renderFlashcardResultsSummary(summary flashcardSummary) string {
+	return strings.Join([]string{
+		m.ContentStyle.EmptyHint.Render("results     "),
+		m.ContentStyle.FlashcardPositive.Render(fmt.Sprintf("%d correct", summary.positiveCount)),
+		m.ContentStyle.EmptyHint.Render(", "),
+		m.ContentStyle.FlashcardRecall.Render(fmt.Sprintf("%d recall", summary.recallCount)),
+		m.ContentStyle.EmptyHint.Render(", "),
+		m.ContentStyle.FlashcardNegative.Render(fmt.Sprintf("%d incorrect", summary.negativeCount)),
+		m.ContentStyle.EmptyHint.Render(", "),
+		m.ContentStyle.FlashcardPending.Render(fmt.Sprintf("%d pending", summary.pendingCount)),
+	}, "")
 }
 
 func (m *Model) displayFolderDashboard() {
@@ -1455,17 +1474,14 @@ func (m *Model) displayFolderDashboard() {
 		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("folder      %s", folder)),
 		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("snippets    %d root, %d nested", rootSnippetCount, nestedSnippetCount)),
 		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("cards       %d root, %d nested", flashcards.rootCount, flashcards.nestedCount)),
-		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("modified    %s", lastModifiedLabel)),
+		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("last modified %s", lastModifiedLabel)),
 		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("tags        %d", tagCount)),
 	}
 	if flashcardsStatus != "" {
 		lines = append(lines, m.ContentStyle.EmptyHint.Render(fmt.Sprintf("flashcards  %s", flashcardsStatus)))
 	}
 	if flashcards.total() > 0 {
-		lines = append(lines, m.ContentStyle.EmptyHint.Render(
-			fmt.Sprintf("results     %d correct, %d incorrect, %d pending", flashcards.positiveCount, flashcards.negativeCount, flashcards.pendingCount),
-		))
-		lines = append(lines, m.ContentStyle.EmptyHint.Render(fmt.Sprintf("remaining   %d", flashcards.remainingCount())))
+		lines = append(lines, m.renderFlashcardResultsSummary(flashcards))
 	}
 	if rootSnippetCount == 0 && nestedSnippetCount == 0 {
 		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("This folder is empty."))
@@ -1566,6 +1582,9 @@ func (m *Model) foldersTitle() string {
 func (m *Model) isCollapsedPreview() bool {
 	if m.pane != contentPane {
 		return false
+	}
+	if m.state == reviewingFlashcardsState {
+		return true
 	}
 	if m.state == navigatingState {
 		return true

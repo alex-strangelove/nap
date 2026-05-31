@@ -1363,6 +1363,38 @@ func TestDeletedTitleBarUsesLightRedBackground(t *testing.T) {
 	}
 }
 
+func TestFlashcardRecallUsesYellowForeground(t *testing.T) {
+	cfg := newConfig()
+	styles := DefaultStyles(cfg)
+	focusedWant := lipgloss.Color(cfg.BrightYellowColor)
+	blurredWant := lipgloss.Color(cfg.YellowColor)
+
+	if got := styles.Folders.Focused.FlashcardRecall.GetForeground(); got != focusedWant {
+		t.Fatalf("expected focused recall color %q, got %q", focusedWant, got)
+	}
+	if got := styles.Folders.Blurred.FlashcardRecall.GetForeground(); got != blurredWant {
+		t.Fatalf("expected blurred recall color %q, got %q", blurredWant, got)
+	}
+}
+
+func TestDashboardFlashcardResultColors(t *testing.T) {
+	cfg := newConfig()
+	styles := DefaultStyles(cfg)
+
+	if got := styles.Content.Focused.FlashcardPositive.GetForeground(); got != lipgloss.Color(cfg.BrightGreenColor) {
+		t.Fatalf("expected focused correct color %q, got %q", cfg.BrightGreenColor, got)
+	}
+	if got := styles.Content.Focused.FlashcardRecall.GetForeground(); got != lipgloss.Color(cfg.BrightYellowColor) {
+		t.Fatalf("expected focused recall color %q, got %q", cfg.BrightYellowColor, got)
+	}
+	if got := styles.Content.Focused.FlashcardNegative.GetForeground(); got != lipgloss.Color(cfg.BrightRedColor) {
+		t.Fatalf("expected focused incorrect color %q, got %q", cfg.BrightRedColor, got)
+	}
+	if got := styles.Content.Focused.FlashcardPending.GetForeground(); got != lipgloss.Color(cfg.SearchHighlightColor) {
+		t.Fatalf("expected focused pending color %q, got %q", cfg.SearchHighlightColor, got)
+	}
+}
+
 func TestFoldersHeaderIsRenderedOutsideListView(t *testing.T) {
 	m := newTestModel()
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
@@ -1396,8 +1428,8 @@ func TestFolderSelectionDisplaysDashboard(t *testing.T) {
 	if !strings.Contains(view, "snippets    1 root, 0 nested") {
 		t.Fatalf("expected snippet count in dashboard, got %q", view)
 	}
-	if !strings.Contains(view, "modified    ") {
-		t.Fatalf("expected modified stat in dashboard, got %q", view)
+	if !strings.Contains(view, "last modified ") {
+		t.Fatalf("expected last modified stat in dashboard, got %q", view)
 	}
 	if strings.Contains(view, "languages   ") {
 		t.Fatalf("did not expect languages stat in dashboard, got %q", view)
@@ -1428,8 +1460,8 @@ func TestEmptyFolderSelectionDisplaysDashboard(t *testing.T) {
 	if !strings.Contains(view, "cards       0 root, 0 nested") {
 		t.Fatalf("expected flashcard count in dashboard, got %q", view)
 	}
-	if !strings.Contains(view, "modified    ") {
-		t.Fatalf("expected modified stat in dashboard, got %q", view)
+	if !strings.Contains(view, "last modified ") {
+		t.Fatalf("expected last modified stat in dashboard, got %q", view)
 	}
 	if !strings.Contains(view, "flashcards  not configured") {
 		t.Fatalf("expected flashcards status in dashboard, got %q", view)
@@ -1439,7 +1471,7 @@ func TestEmptyFolderSelectionDisplaysDashboard(t *testing.T) {
 func TestFolderDashboardShowsFlashcardReadyStatus(t *testing.T) {
 	tmp := tmpHome(t)
 	m := newTestModel()
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	m.config.Home = tmp
 	folder := Folder(defaultSnippetFolder)
 	deck := Snippet{
@@ -1467,11 +1499,23 @@ func TestFolderDashboardShowsFlashcardReadyStatus(t *testing.T) {
 	if view := m.Code.View(); !strings.Contains(view, "cards       2 root, 0 nested") {
 		t.Fatalf("expected flashcard count in dashboard, got %q", view)
 	}
-	if view := m.Code.View(); !strings.Contains(view, "results     0 correct, 0 incorrect, 2 pending") {
+	if view := m.Code.View(); !strings.Contains(view, "results     0 correct, 0 recall, 0 incorrect, 2 pending") {
 		t.Fatalf("expected flashcard result counts in dashboard, got %q", view)
 	}
-	if view := m.Code.View(); !strings.Contains(view, "remaining   2") {
-		t.Fatalf("expected remaining flashcard count in dashboard, got %q", view)
+	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardPositive.Render("0 correct")) {
+		t.Fatalf("expected correct count to use positive style, got %q", view)
+	}
+	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardRecall.Render("0 recall")) {
+		t.Fatalf("expected recall count to use recall style, got %q", view)
+	}
+	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardNegative.Render("0 incorrect")) {
+		t.Fatalf("expected incorrect count to use negative style, got %q", view)
+	}
+	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardPending.Render("2 pending")) {
+		t.Fatalf("expected pending count to use pending style, got %q", view)
+	}
+	if view := m.Code.View(); strings.Contains(view, "remaining   ") {
+		t.Fatalf("expected remaining flashcard count to be removed, got %q", view)
 	}
 }
 
@@ -1511,6 +1555,48 @@ func TestFolderDashboardShowsResetFlashcardsHintForAnsweredDeck(t *testing.T) {
 	if !strings.Contains(view, "reset napcards progress.") {
 		t.Fatalf("expected reset hint in folder dashboard, got %q", view)
 	}
+}
+
+func TestFolderDashboardShowsRecallCountForHardReviews(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	folder := Folder(defaultSnippetFolder)
+	deck := Snippet{
+		Name:     nativeFlashcardDeckStem,
+		Folder:   defaultSnippetFolder,
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	if err := writeNativeFlashcardState(tmp, deck, nativeFlashcardState{
+		Cards: map[string]nativeFlashcardProgress{
+			"linux-paging-4level-walk": {Reviews: 1, LastGrade: flashcardGradeHard, DueAt: time.Now().Add(24 * time.Hour)},
+			"mmap-private-anon":        {Reviews: 1, LastGrade: flashcardGradeGood, DueAt: time.Now().Add(24 * time.Hour)},
+		},
+	}); err != nil {
+		t.Fatalf("could not write native flashcard state: %v", err)
+	}
+	m.Lists[folder] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{folder})
+	m.Folders.Select(0)
+
+	m.displayFolderDashboard()
+	if view := m.Code.View(); !strings.Contains(view, "results     1 correct, 1 recall, 0 incorrect, 0 pending") {
+		t.Fatalf("expected recall count in dashboard, got %q", view)
+	}
+	if view := m.Code.View(); strings.Contains(view, "remaining   ") {
+		t.Fatalf("expected remaining line to be removed, got %q", view)
+	}
+	view := m.Code.View()
 	if !strings.Contains(view, "z") {
 		t.Fatalf("expected z binding in folder dashboard, got %q", view)
 	}

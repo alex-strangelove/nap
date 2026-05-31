@@ -14,14 +14,15 @@ const (
 )
 
 var (
-	errFlashcardDeckMissing       = errors.New("flashcard deck not found")
-	errFlashcardDeckAmbiguous     = errors.New("multiple flashcard decks found")
+	errFlashcardDeckMissing   = errors.New("flashcard deck not found")
+	errFlashcardDeckAmbiguous = errors.New("multiple flashcard decks found")
 )
 
 type flashcardDeckState int
 
 const (
 	flashcardDeckPending flashcardDeckState = iota
+	flashcardDeckRecall
 	flashcardDeckPositive
 	flashcardDeckNegative
 )
@@ -51,6 +52,8 @@ func flashcardDeckStateForFile(file string) (flashcardDeckState, bool) {
 
 func flashcardDeckStatusLabel(state flashcardDeckState) string {
 	switch state {
+	case flashcardDeckRecall:
+		return "answered with effort"
 	case flashcardDeckPositive:
 		return "answered correctly"
 	case flashcardDeckNegative:

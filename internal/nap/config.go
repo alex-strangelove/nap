@@ -30,6 +30,8 @@ type Config struct {
 
 	PrimaryColor         string `env:"NAP_PRIMARY_COLOR" yaml:"primary_color"`
 	PrimaryColorSubdued  string `env:"NAP_PRIMARY_COLOR_SUBDUED" yaml:"primary_color_subdued"`
+	BrightYellowColor    string `env:"NAP_BRIGHT_YELLOW" yaml:"bright_yellow"`
+	YellowColor          string `env:"NAP_YELLOW" yaml:"yellow"`
 	BrightGreenColor     string `env:"NAP_BRIGHT_GREEN" yaml:"bright_green"`
 	GreenColor           string `env:"NAP_GREEN" yaml:"green"`
 	BrightRedColor       string `env:"NAP_BRIGHT_RED" yaml:"bright_red"`
@@ -52,6 +54,8 @@ func newConfig() Config {
 		Theme:                "dracula",
 		PrimaryColor:         "#AFBEE1",
 		PrimaryColorSubdued:  "#64708D",
+		BrightYellowColor:    "#EADDA6",
+		YellowColor:          "#8A7F4B",
 		BrightGreenColor:     "#BCE1AF",
 		GreenColor:           "#527251",
 		BrightRedColor:       "#E49393",

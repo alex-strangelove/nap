@@ -12,13 +12,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	nativeFlashcardDeckStem   = "00-nap-cards"
-	nativeFlashcardHeaderLine = "<!-- nap-flashcards:v1 -->"
+	nativeFlashcardDeckStem     = "00-nap-cards"
+	nativeFlashcardHeaderLineV1 = "<!-- nap-flashcards:v1 -->"
+	nativeFlashcardHeaderLineV2 = "<!-- nap-deck: v2 -->"
 )
 
 var (
@@ -33,11 +35,24 @@ type nativeFlashcardDeck struct {
 	Cards []nativeFlashcard
 }
 
+type nativeFlashcardType string
+
+const (
+	nativeFlashcardTypeBasic        nativeFlashcardType = "basic"
+	nativeFlashcardTypeSingleChoice nativeFlashcardType = "single-choice"
+	nativeFlashcardTypeMultiChoice  nativeFlashcardType = "multi-choice"
+	nativeFlashcardTypeCodeCloze    nativeFlashcardType = "code-cloze"
+)
+
 type nativeFlashcard struct {
-	ID       string
-	Tags     []string
-	Question string
-	Answer   string
+	ID             string
+	Type           nativeFlashcardType
+	Tags           []string
+	Question       string
+	Answer         string
+	Explanation    string
+	Options        []string
+	CorrectOptions []string
 }
 
 type nativeFlashcardMetadata struct {
@@ -68,13 +83,22 @@ type nativeFlashcardState struct {
 	Cards map[string]nativeFlashcardProgress `json:"cards"`
 }
 
+type nativeFlashcardReviewPhase int
+
+const (
+	nativeFlashcardPhaseQuestion nativeFlashcardReviewPhase = iota
+	nativeFlashcardPhaseResult
+)
+
 type nativeFlashcardReviewSession struct {
-	Deck      Snippet
-	Cards     []nativeFlashcard
-	Queue     []int
-	Position  int
-	Revealed  bool
-	Completed int
+	Deck       Snippet
+	Cards      []nativeFlashcard
+	Queue      []int
+	Position   int
+	Completed  int
+	Phase      nativeFlashcardReviewPhase
+	Cursor     int
+	Selections map[int]bool
 }
 
 func defaultNativeFlashcardDeckContent() string {
@@ -118,11 +142,22 @@ func parseNativeFlashcardDeck(content []byte) (nativeFlashcardDeck, error) {
 	for index < len(lines) && strings.TrimSpace(lines[index]) == "" {
 		index++
 	}
-	if index >= len(lines) || strings.TrimSpace(lines[index]) != nativeFlashcardHeaderLine {
-		return nativeFlashcardDeck{}, fmt.Errorf("%w: missing %s header", errNativeFlashcardDeckInvalid, nativeFlashcardHeaderLine)
+	if index >= len(lines) {
+		return nativeFlashcardDeck{}, fmt.Errorf("%w: missing deck header", errNativeFlashcardDeckInvalid)
 	}
-	index++
 
+	switch strings.TrimSpace(lines[index]) {
+	case nativeFlashcardHeaderLineV1:
+		return parseNativeFlashcardDeckV1(lines[index+1:])
+	case nativeFlashcardHeaderLineV2:
+		return parseNativeFlashcardDeckV2(lines[index+1:])
+	default:
+		return nativeFlashcardDeck{}, fmt.Errorf("%w: missing supported deck header", errNativeFlashcardDeckInvalid)
+	}
+}
+
+func parseNativeFlashcardDeckV1(lines []string) (nativeFlashcardDeck, error) {
+	index := 0
 	deck := nativeFlashcardDeck{Cards: make([]nativeFlashcard, 0, 4)}
 	for index < len(lines) {
 		for index < len(lines) && strings.TrimSpace(lines[index]) == "" {
@@ -154,23 +189,20 @@ func parseNativeFlashcardDeck(content []byte) (nativeFlashcardDeck, error) {
 
 		index++
 		bodyStart := index
-		inFence := false
 		for index < len(lines) {
 			trimmed := strings.TrimSpace(lines[index])
-			if strings.HasPrefix(trimmed, "```") {
-				inFence = !inFence
-			}
-			if !inFence && trimmed == "---" {
+			if trimmed == "---" {
 				break
 			}
 			index++
 		}
-		question, answer, err := parseNativeFlashcardBody(strings.Join(lines[bodyStart:index], "\n"))
+		question, answer, err := parseNativeFlashcardBodyV1(strings.Join(lines[bodyStart:index], "\n"))
 		if err != nil {
 			return nativeFlashcardDeck{}, err
 		}
 		deck.Cards = append(deck.Cards, nativeFlashcard{
 			ID:       strings.TrimSpace(metadata.ID),
+			Type:     nativeFlashcardTypeBasic,
 			Tags:     slices.Clone(metadata.Tags),
 			Question: question,
 			Answer:   answer,
@@ -183,12 +215,72 @@ func parseNativeFlashcardDeck(content []byte) (nativeFlashcardDeck, error) {
 	return deck, nil
 }
 
+func parseNativeFlashcardDeckV2(lines []string) (nativeFlashcardDeck, error) {
+	blocks := splitNativeFlashcardBlocks(strings.Join(lines, "\n"), "+++")
+	deck := nativeFlashcardDeck{Cards: make([]nativeFlashcard, 0, len(blocks))}
+	for _, block := range blocks {
+		if strings.TrimSpace(block) == "" {
+			continue
+		}
+		card, err := parseNativeFlashcardBlockV2(block)
+		if err != nil {
+			return nativeFlashcardDeck{}, err
+		}
+		deck.Cards = append(deck.Cards, card)
+	}
+	if len(deck.Cards) == 0 {
+		return nativeFlashcardDeck{}, fmt.Errorf("%w: no cards found", errNativeFlashcardDeckInvalid)
+	}
+	return deck, nil
+}
+
+func splitNativeFlashcardBlocks(text, separator string) []string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	blocks := make([]string, 0, 4)
+	current := make([]string, 0, len(lines))
+	openFence := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if fence, ok := nativeFlashcardFenceDelimiter(trimmed); ok {
+			if openFence == "" {
+				openFence = fence
+			} else if fence == openFence {
+				openFence = ""
+			}
+		}
+		if openFence == "" && trimmed == separator {
+			blocks = append(blocks, strings.TrimSpace(strings.Join(current, "\n")))
+			current = current[:0]
+			continue
+		}
+		current = append(current, line)
+	}
+	if block := strings.TrimSpace(strings.Join(current, "\n")); block != "" {
+		blocks = append(blocks, block)
+	}
+	return blocks
+}
+
+func nativeFlashcardFenceDelimiter(line string) (string, bool) {
+	if !strings.HasPrefix(line, "`") {
+		return "", false
+	}
+	count := 0
+	for count < len(line) && line[count] == '`' {
+		count++
+	}
+	if count < 3 {
+		return "", false
+	}
+	return line[:count], true
+}
+
 func parseNativeFlashcardBlock(block string) (nativeFlashcard, error) {
 	trimmed := strings.TrimSpace(block)
 	if trimmed == "" {
 		return nativeFlashcard{}, fmt.Errorf("%w: empty block", errNativeFlashcardDeckInvalid)
 	}
-	deck, err := parseNativeFlashcardDeck([]byte(nativeFlashcardHeaderLine + "\n\n" + trimmed))
+	deck, err := parseNativeFlashcardDeck([]byte(nativeFlashcardHeaderLineV2 + "\n\n" + trimmed))
 	if err != nil {
 		return nativeFlashcard{}, err
 	}
@@ -198,7 +290,156 @@ func parseNativeFlashcardBlock(block string) (nativeFlashcard, error) {
 	return deck.Cards[0], nil
 }
 
-func parseNativeFlashcardBody(body string) (string, string, error) {
+func parseNativeFlashcardBlockV2(block string) (nativeFlashcard, error) {
+	lines := strings.Split(strings.TrimSpace(block), "\n")
+	card := nativeFlashcard{
+		Type:        nativeFlashcardTypeBasic,
+		Tags:        []string{},
+		Options:     []string{},
+		Explanation: "",
+	}
+
+	index := 0
+	for index < len(lines) {
+		trimmed := strings.TrimSpace(lines[index])
+		if trimmed == "" {
+			index++
+			continue
+		}
+		key, value, ok := parseNativeFlashcardCommentMetadata(trimmed)
+		if !ok {
+			break
+		}
+		switch key {
+		case "id":
+			card.ID = value
+		case "type":
+			card.Type = nativeFlashcardType(value)
+		}
+		index++
+	}
+
+	if card.ID == "" {
+		return nativeFlashcard{}, fmt.Errorf("%w: card id is required", errNativeFlashcardDeckInvalid)
+	}
+	if !card.Type.valid() {
+		return nativeFlashcard{}, fmt.Errorf("%w: unsupported card type %q", errNativeFlashcardDeckInvalid, card.Type)
+	}
+
+	sections, err := parseNativeFlashcardSections(lines[index:])
+	if err != nil {
+		return nativeFlashcard{}, err
+	}
+
+	card.Question = strings.TrimSpace(sections["Prompt"])
+	card.Answer = strings.TrimSpace(sections["Answer"])
+	card.Explanation = strings.TrimSpace(sections["Explanation"])
+	card.Options = parseNativeFlashcardListSection(sections["Options"])
+	card.CorrectOptions = parseNativeFlashcardListSection(sections["Correct"])
+	if len(card.CorrectOptions) == 0 && card.Answer != "" {
+		card.CorrectOptions = []string{card.Answer}
+	}
+	if tagsText := strings.TrimSpace(sections["Tags"]); tagsText != "" {
+		card.Tags = parseNativeFlashcardTags(tagsText)
+	}
+
+	if card.Question == "" {
+		return nativeFlashcard{}, fmt.Errorf("%w: each v2 card needs a Prompt section", errNativeFlashcardDeckInvalid)
+	}
+	switch card.Type {
+	case nativeFlashcardTypeBasic:
+		if card.Answer == "" {
+			return nativeFlashcard{}, fmt.Errorf("%w: basic cards need an Answer section", errNativeFlashcardDeckInvalid)
+		}
+	case nativeFlashcardTypeSingleChoice, nativeFlashcardTypeCodeCloze:
+		if len(card.Options) < 2 || len(card.CorrectOptions) != 1 {
+			return nativeFlashcard{}, fmt.Errorf("%w: %s cards need options and exactly one correct answer", errNativeFlashcardDeckInvalid, card.Type)
+		}
+	case nativeFlashcardTypeMultiChoice:
+		if len(card.Options) < 2 || len(card.CorrectOptions) == 0 {
+			return nativeFlashcard{}, fmt.Errorf("%w: multi-choice cards need options and at least one correct answer", errNativeFlashcardDeckInvalid)
+		}
+	}
+
+	return card, nil
+}
+
+func parseNativeFlashcardCommentMetadata(line string) (string, string, bool) {
+	if !strings.HasPrefix(line, "<!--") || !strings.HasSuffix(line, "-->") {
+		return "", "", false
+	}
+	value := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "<!--"), "-->"))
+	parts := strings.SplitN(value, ":", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), true
+}
+
+func parseNativeFlashcardSections(lines []string) (map[string]string, error) {
+	sections := map[string]string{}
+	current := ""
+	buffer := []string{}
+	store := func() {
+		if current == "" {
+			return
+		}
+		sections[current] = strings.TrimSpace(strings.Join(buffer, "\n"))
+		buffer = buffer[:0]
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch trimmed {
+		case "Prompt:", "Options:", "Answer:", "Correct:", "Explanation:", "Tags:":
+			store()
+			current = strings.TrimSuffix(trimmed, ":")
+			continue
+		}
+		if current == "" {
+			if trimmed == "" {
+				continue
+			}
+			return nil, fmt.Errorf("%w: unexpected content before first section", errNativeFlashcardDeckInvalid)
+		}
+		buffer = append(buffer, line)
+	}
+	store()
+	return sections, nil
+}
+
+func parseNativeFlashcardListSection(section string) []string {
+	if strings.TrimSpace(section) == "" {
+		return nil
+	}
+	lines := strings.Split(section, "\n")
+	values := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- ") {
+			trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
+		}
+		values = append(values, trimmed)
+	}
+	return values
+}
+
+func parseNativeFlashcardTags(section string) []string {
+	parts := strings.Split(section, ",")
+	tags := make([]string, 0, len(parts))
+	for _, part := range parts {
+		tag := strings.TrimSpace(strings.TrimPrefix(part, "-"))
+		if tag != "" {
+			tags = append(tags, tag)
+		}
+	}
+	return tags
+}
+
+func parseNativeFlashcardBodyV1(body string) (string, string, error) {
 	lines := strings.Split(strings.TrimSpace(body), "\n")
 	section := ""
 	question := make([]string, 0, len(lines))
@@ -221,7 +462,6 @@ func parseNativeFlashcardBody(body string) (string, string, error) {
 			}
 			continue
 		}
-
 		switch section {
 		case "question":
 			question = append(question, line)
@@ -288,9 +528,11 @@ func buildNativeFlashcardReviewSession(deck Snippet, parsed nativeFlashcardDeck,
 		return nil, errNativeFlashcardNoCardsDue
 	}
 	return &nativeFlashcardReviewSession{
-		Deck:  deck,
-		Cards: slices.Clone(parsed.Cards),
-		Queue: queue,
+		Deck:       deck,
+		Cards:      slices.Clone(parsed.Cards),
+		Queue:      queue,
+		Phase:      nativeFlashcardPhaseQuestion,
+		Selections: map[int]bool{},
 	}, nil
 }
 
@@ -347,6 +589,8 @@ func nativeFlashcardSummary(parsed nativeFlashcardDeck, state nativeFlashcardSta
 		switch {
 		case !ok || progress.DueAt.IsZero() || !progress.DueAt.After(now):
 			summary.pendingCount++
+		case progress.LastGrade == flashcardGradeHard:
+			summary.recallCount++
 		case progress.LastGrade == flashcardGradeAgain:
 			summary.negativeCount++
 		default:
@@ -403,11 +647,31 @@ func nativeFlashcardIndicatorStates(home string, deck Snippet, now time.Time) []
 		return nil
 	}
 	summary := nativeFlashcardSummary(parsed, state, now)
-	states := make([]flashcardDeckState, 0, 2)
-	if summary.positiveCount > 0 {
+	states := make([]flashcardDeckState, 0, 3)
+	hasRecall := false
+	hasPositive := false
+	hasNegative := false
+	for _, card := range parsed.Cards {
+		progress, ok := state.Cards[card.ID]
+		if !ok || progress.DueAt.IsZero() || !progress.DueAt.After(now) {
+			continue
+		}
+		switch progress.LastGrade {
+		case flashcardGradeAgain:
+			hasNegative = true
+		case flashcardGradeHard:
+			hasRecall = true
+		default:
+			hasPositive = true
+		}
+	}
+	if hasRecall {
+		states = append(states, flashcardDeckRecall)
+	}
+	if hasPositive {
 		states = append(states, flashcardDeckPositive)
 	}
-	if summary.negativeCount > 0 {
+	if hasNegative || summary.negativeCount > 0 {
 		states = append(states, flashcardDeckNegative)
 	}
 	return states
@@ -460,7 +724,7 @@ func (m *Model) stopNativeFlashcardReview() tea.Cmd {
 }
 
 func (m *Model) gradeNativeFlashcard(grade flashcardGrade) tea.Cmd {
-	if m.flashcardSession == nil || !m.flashcardSession.Revealed {
+	if m.flashcardSession == nil || m.flashcardSession.Phase != nativeFlashcardPhaseResult {
 		return nil
 	}
 
@@ -471,7 +735,7 @@ func (m *Model) gradeNativeFlashcard(grade flashcardGrade) tea.Cmd {
 		return nil
 	}
 
-	card := m.flashcardSession.Cards[m.flashcardSession.Queue[m.flashcardSession.Position]]
+	card := m.flashcardSession.currentCard()
 	progress := scheduleNativeFlashcard(state.Cards[card.ID], grade, time.Now())
 	if state.Cards == nil {
 		state.Cards = map[string]nativeFlashcardProgress{}
@@ -484,11 +748,71 @@ func (m *Model) gradeNativeFlashcard(grade flashcardGrade) tea.Cmd {
 
 	m.flashcardSession.Completed++
 	m.flashcardSession.Position++
-	m.flashcardSession.Revealed = false
+	m.flashcardSession.Phase = nativeFlashcardPhaseQuestion
+	m.flashcardSession.Cursor = 0
+	clear(m.flashcardSession.Selections)
 	if m.flashcardSession.Position >= len(m.flashcardSession.Queue) {
 		return m.stopNativeFlashcardReview()
 	}
 
+	return m.updateContent()
+}
+
+func (m *Model) moveNativeFlashcardSelection(delta int) tea.Cmd {
+	if m.flashcardSession == nil {
+		return nil
+	}
+	card := m.flashcardSession.currentCard()
+	if !card.hasOptions() || m.flashcardSession.Phase != nativeFlashcardPhaseQuestion {
+		return nil
+	}
+	optionCount := len(card.Options)
+	if optionCount == 0 {
+		return nil
+	}
+	m.flashcardSession.Cursor = (m.flashcardSession.Cursor + delta + optionCount) % optionCount
+	return m.updateContent()
+}
+
+func (m *Model) toggleNativeFlashcardSelection() tea.Cmd {
+	if m.flashcardSession == nil {
+		return nil
+	}
+	card := m.flashcardSession.currentCard()
+	if card.Type != nativeFlashcardTypeMultiChoice || m.flashcardSession.Phase != nativeFlashcardPhaseQuestion {
+		return nil
+	}
+	if m.flashcardSession.Selections == nil {
+		m.flashcardSession.Selections = map[int]bool{}
+	}
+	index := m.flashcardSession.Cursor
+	if m.flashcardSession.Selections[index] {
+		delete(m.flashcardSession.Selections, index)
+	} else {
+		m.flashcardSession.Selections[index] = true
+	}
+	return m.updateContent()
+}
+
+func (m *Model) submitNativeFlashcardAnswer() tea.Cmd {
+	if m.flashcardSession == nil || m.flashcardSession.Phase != nativeFlashcardPhaseQuestion {
+		return nil
+	}
+	card := m.flashcardSession.currentCard()
+	switch card.Type {
+	case nativeFlashcardTypeBasic:
+		m.flashcardSession.Phase = nativeFlashcardPhaseResult
+	case nativeFlashcardTypeSingleChoice, nativeFlashcardTypeCodeCloze:
+		m.flashcardSession.Selections = map[int]bool{m.flashcardSession.Cursor: true}
+		m.flashcardSession.Phase = nativeFlashcardPhaseResult
+	case nativeFlashcardTypeMultiChoice:
+		if len(m.flashcardSession.Selections) == 0 {
+			return nil
+		}
+		m.flashcardSession.Phase = nativeFlashcardPhaseResult
+	default:
+		return nil
+	}
 	return m.updateContent()
 }
 
@@ -498,36 +822,187 @@ func (m *Model) displayNativeFlashcardReview() {
 		return
 	}
 
-	cardIndex := m.flashcardSession.Queue[m.flashcardSession.Position]
-	card := m.flashcardSession.Cards[cardIndex]
+	card := m.flashcardSession.currentCard()
 	lines := []string{
-		m.ContentStyle.EmptyHint.Render("Nap flashcards"),
+		m.ContentStyle.EmptyHint.Render("Napcards review"),
 		"",
 		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("deck        %s", m.flashcardSession.Deck.Path())),
 		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("card        %d/%d", m.flashcardSession.Position+1, len(m.flashcardSession.Queue))),
+		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("type        %s", card.Type)),
 	}
 	if len(card.Tags) > 0 {
 		lines = append(lines, m.ContentStyle.EmptyHint.Render(fmt.Sprintf("tags        %s", strings.Join(card.Tags, ", "))))
 	}
 	lines = append(lines, "", card.Question, "")
-	if m.flashcardSession.Revealed {
-		lines = append(lines,
-			m.ContentStyle.EmptyHint.Render("answer"),
-			"",
-			card.Answer,
-			"",
-			fmt.Sprintf("%s %s", m.ContentStyle.EmptyHintKey.Render("1"), m.ContentStyle.EmptyHint.Render("• again")),
-			fmt.Sprintf("%s %s", m.ContentStyle.EmptyHintKey.Render("2"), m.ContentStyle.EmptyHint.Render("• hard")),
-			fmt.Sprintf("%s %s", m.ContentStyle.EmptyHintKey.Render("3"), m.ContentStyle.EmptyHint.Render("• good")),
-			fmt.Sprintf("%s %s", m.ContentStyle.EmptyHintKey.Render("4"), m.ContentStyle.EmptyHint.Render("• easy")),
-		)
-	} else {
-		lines = append(lines, fmt.Sprintf("%s %s", m.ContentStyle.EmptyHintKey.Render("space"), m.ContentStyle.EmptyHint.Render("• reveal answer")))
+	lines = append(lines, m.renderNativeFlashcardOptions(card)...)
+	lines = append(lines, m.renderNativeFlashcardResult(card)...)
+
+	for _, hint := range m.nativeFlashcardHints(card) {
+		lines = append(lines, fmt.Sprintf("%s %s", m.ContentStyle.EmptyHintKey.Render(hint.binding.Help().Key), m.ContentStyle.EmptyHint.Render("• "+hint.help)))
 	}
-	lines = append(lines, fmt.Sprintf("%s %s", m.ContentStyle.EmptyHintKey.Render("esc"), m.ContentStyle.EmptyHint.Render("• stop review")))
 
 	m.LineNumbers.SetContent(strings.Repeat("  ~ \n", len(lines)))
 	m.LineNumbers.SetYOffset(0)
 	m.Code.SetContent(strings.Join(lines, "\n"))
 	m.Code.SetYOffset(0)
+}
+
+func (m *Model) renderNativeFlashcardOptions(card nativeFlashcard) []string {
+	if !card.hasOptions() {
+		return nil
+	}
+	lines := []string{m.ContentStyle.EmptyHint.Render("options"), ""}
+	for idx, option := range card.Options {
+		prefix := "  "
+		if m.flashcardSession.Phase == nativeFlashcardPhaseQuestion && idx == m.flashcardSession.Cursor {
+			prefix = "> "
+		}
+		selection := "[ ]"
+		if m.flashcardSession.selected(idx) {
+			selection = "[x]"
+		}
+		switch {
+		case m.flashcardSession.Phase != nativeFlashcardPhaseResult:
+		case card.optionIsCorrect(option) && m.flashcardSession.selected(idx):
+			selection = "[✓]"
+		case card.optionIsCorrect(option):
+			selection = "[+]"
+		case m.flashcardSession.selected(idx):
+			selection = "[x]"
+		}
+		lines = append(lines, fmt.Sprintf("%s%s %s", prefix, selection, option))
+	}
+	lines = append(lines, "")
+	return lines
+}
+
+func (m *Model) renderNativeFlashcardResult(card nativeFlashcard) []string {
+	if m.flashcardSession.Phase != nativeFlashcardPhaseResult {
+		return nil
+	}
+	lines := []string{
+		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("result      %s", m.nativeFlashcardResultLabel(card))),
+	}
+	if card.Answer != "" {
+		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("answer"), "", card.Answer)
+	} else if len(card.CorrectOptions) > 0 {
+		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("correct"), "", strings.Join(card.CorrectOptions, "\n"))
+	}
+	if card.Explanation != "" {
+		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("explanation"), "", card.Explanation)
+	}
+	lines = append(lines, "",
+		fmt.Sprintf("%s %s", m.ContentStyle.EmptyHintKey.Render("1"), m.ContentStyle.EmptyHint.Render("• again")),
+		fmt.Sprintf("%s %s", m.ContentStyle.EmptyHintKey.Render("2"), m.ContentStyle.EmptyHint.Render("• hard")),
+		fmt.Sprintf("%s %s", m.ContentStyle.EmptyHintKey.Render("3"), m.ContentStyle.EmptyHint.Render("• good")),
+		fmt.Sprintf("%s %s", m.ContentStyle.EmptyHintKey.Render("4"), m.ContentStyle.EmptyHint.Render("• easy")),
+	)
+	return lines
+}
+
+func (m *Model) nativeFlashcardResultLabel(card nativeFlashcard) string {
+	if card.Type == nativeFlashcardTypeBasic {
+		return "revealed"
+	}
+	if card.isCorrectSelection(m.flashcardSession.selectedOptionTexts(card)) {
+		return "correct"
+	}
+	return "incorrect"
+}
+
+func (m *Model) nativeFlashcardHints(card nativeFlashcard) []keyHint {
+	switch m.flashcardSession.Phase {
+	case nativeFlashcardPhaseQuestion:
+		switch card.Type {
+		case nativeFlashcardTypeBasic:
+			return []keyHint{
+				{binding: keyBinding("space", "reveal answer"), help: "reveal answer"},
+				{binding: keyBinding("esc", "stop review"), help: "stop review"},
+			}
+		case nativeFlashcardTypeMultiChoice:
+			return []keyHint{
+				{binding: keyBinding("↑/↓", "move"), help: "move"},
+				{binding: keyBinding("space", "toggle option"), help: "toggle option"},
+				{binding: keyBinding("enter", "submit answer"), help: "submit answer"},
+				{binding: keyBinding("esc", "stop review"), help: "stop review"},
+			}
+		default:
+			return []keyHint{
+				{binding: keyBinding("↑/↓", "move"), help: "move"},
+				{binding: keyBinding("enter", "submit answer"), help: "submit answer"},
+				{binding: keyBinding("esc", "stop review"), help: "stop review"},
+			}
+		}
+	default:
+		return []keyHint{
+			{binding: keyBinding("esc", "stop review"), help: "stop review"},
+		}
+	}
+}
+
+func keyBinding(keyName, helpText string) key.Binding {
+	return key.NewBinding(key.WithKeys(keyName), key.WithHelp(keyName, helpText))
+}
+
+func (t nativeFlashcardType) valid() bool {
+	switch t {
+	case nativeFlashcardTypeBasic, nativeFlashcardTypeSingleChoice, nativeFlashcardTypeMultiChoice, nativeFlashcardTypeCodeCloze:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c nativeFlashcard) hasOptions() bool {
+	return len(c.Options) > 0
+}
+
+func (c nativeFlashcard) optionIsCorrect(option string) bool {
+	for _, answer := range c.CorrectOptions {
+		if strings.TrimSpace(answer) == strings.TrimSpace(option) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c nativeFlashcard) isCorrectSelection(selected []string) bool {
+	if len(selected) != len(c.CorrectOptions) {
+		return false
+	}
+	want := make([]string, 0, len(c.CorrectOptions))
+	for _, answer := range c.CorrectOptions {
+		want = append(want, strings.TrimSpace(answer))
+	}
+	got := make([]string, 0, len(selected))
+	for _, answer := range selected {
+		got = append(got, strings.TrimSpace(answer))
+	}
+	slices.Sort(want)
+	slices.Sort(got)
+	return slices.Equal(want, got)
+}
+
+func (s *nativeFlashcardReviewSession) currentCard() nativeFlashcard {
+	return s.Cards[s.Queue[s.Position]]
+}
+
+func (s *nativeFlashcardReviewSession) selected(index int) bool {
+	if s.Selections == nil {
+		return false
+	}
+	return s.Selections[index]
+}
+
+func (s *nativeFlashcardReviewSession) selectedOptionTexts(card nativeFlashcard) []string {
+	if len(s.Selections) == 0 {
+		return nil
+	}
+	answers := make([]string, 0, len(s.Selections))
+	for idx := range s.Selections {
+		if idx >= 0 && idx < len(card.Options) {
+			answers = append(answers, card.Options[idx])
+		}
+	}
+	return answers
 }

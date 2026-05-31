@@ -201,6 +201,8 @@ func (d folderDelegate) itemStatus(item list.Item) string {
 	dots := make([]string, 0, len(states))
 	for _, state := range states {
 		switch state {
+		case flashcardDeckRecall:
+			dots = append(dots, d.styles.FlashcardRecall.Render("●"))
 		case flashcardDeckPositive:
 			dots = append(dots, d.styles.FlashcardPositive.Render("●"))
 		case flashcardDeckNegative:

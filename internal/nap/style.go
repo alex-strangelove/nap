@@ -50,6 +50,7 @@ type FoldersBaseStyle struct {
 	Selected          lipgloss.Style
 	Unselected        lipgloss.Style
 	FlashcardPending  lipgloss.Style
+	FlashcardRecall   lipgloss.Style
 	FlashcardPositive lipgloss.Style
 	FlashcardNegative lipgloss.Style
 }
@@ -57,13 +58,17 @@ type FoldersBaseStyle struct {
 // ContentBaseStyle holds the neccessary styling for the content pane of the
 // application.
 type ContentBaseStyle struct {
-	Base         lipgloss.Style
-	TitleBar     lipgloss.Style
-	Title        lipgloss.Style
-	Separator    lipgloss.Style
-	LineNumber   lipgloss.Style
-	EmptyHint    lipgloss.Style
-	EmptyHintKey lipgloss.Style
+	Base              lipgloss.Style
+	TitleBar          lipgloss.Style
+	Title             lipgloss.Style
+	Separator         lipgloss.Style
+	LineNumber        lipgloss.Style
+	EmptyHint         lipgloss.Style
+	EmptyHintKey      lipgloss.Style
+	FlashcardPending  lipgloss.Style
+	FlashcardRecall   lipgloss.Style
+	FlashcardPositive lipgloss.Style
+	FlashcardNegative lipgloss.Style
 }
 
 // Styles is the struct of all styles for the application.
@@ -82,12 +87,15 @@ func DefaultStyles(config Config) Styles {
 	gray := lipgloss.Color(config.GrayColor)
 	black := lipgloss.Color(config.BackgroundColor)
 	brightBlack := lipgloss.Color(config.BlackColor)
+	yellow := lipgloss.Color(config.YellowColor)
+	brightYellow := lipgloss.Color(config.BrightYellowColor)
 	green := lipgloss.Color(config.GreenColor)
 	brightGreen := lipgloss.Color(config.BrightGreenColor)
 	brightBlue := lipgloss.Color(config.PrimaryColor)
 	blue := lipgloss.Color(config.PrimaryColorSubdued)
 	red := lipgloss.Color(config.RedColor)
 	brightRed := lipgloss.Color(config.BrightRedColor)
+	cyan := lipgloss.Color(config.SearchHighlightColor)
 	lightDeleteRed := lipgloss.Color("#F2B8B5")
 
 	return Styles{
@@ -129,6 +137,7 @@ func DefaultStyles(config Config) Styles {
 				Selected:          lipgloss.NewStyle().Foreground(brightBlue),
 				Unselected:        lipgloss.NewStyle().Foreground(gray),
 				FlashcardPending:  lipgloss.NewStyle().Foreground(brightBlack),
+				FlashcardRecall:   lipgloss.NewStyle().Foreground(brightYellow),
 				FlashcardPositive: lipgloss.NewStyle().Foreground(brightGreen),
 				FlashcardNegative: lipgloss.NewStyle().Foreground(brightRed),
 			},
@@ -139,28 +148,37 @@ func DefaultStyles(config Config) Styles {
 				Selected:          lipgloss.NewStyle().Foreground(brightBlue),
 				Unselected:        lipgloss.NewStyle().Foreground(lipgloss.Color("237")),
 				FlashcardPending:  lipgloss.NewStyle().Foreground(brightBlack),
+				FlashcardRecall:   lipgloss.NewStyle().Foreground(yellow),
 				FlashcardPositive: lipgloss.NewStyle().Foreground(green),
 				FlashcardNegative: lipgloss.NewStyle().Foreground(red),
 			},
 		},
 		Content: ContentStyle{
 			Focused: ContentBaseStyle{
-				Base:         lipgloss.NewStyle().Margin(0, 1),
-				TitleBar:     lipgloss.NewStyle().Background(blue).Foreground(white).Padding(0, 1),
-				Title:        lipgloss.NewStyle().Background(blue).Foreground(white).Margin(0, 0, 1, 1).Padding(0, 1),
-				Separator:    lipgloss.NewStyle().Foreground(white).Margin(0, 0, 1, 1),
-				LineNumber:   lipgloss.NewStyle().Foreground(brightBlack),
-				EmptyHint:    lipgloss.NewStyle().Foreground(gray),
-				EmptyHintKey: lipgloss.NewStyle().Foreground(brightBlue),
+				Base:              lipgloss.NewStyle().Margin(0, 1),
+				TitleBar:          lipgloss.NewStyle().Background(blue).Foreground(white).Padding(0, 1),
+				Title:             lipgloss.NewStyle().Background(blue).Foreground(white).Margin(0, 0, 1, 1).Padding(0, 1),
+				Separator:         lipgloss.NewStyle().Foreground(white).Margin(0, 0, 1, 1),
+				LineNumber:        lipgloss.NewStyle().Foreground(brightBlack),
+				EmptyHint:         lipgloss.NewStyle().Foreground(gray),
+				EmptyHintKey:      lipgloss.NewStyle().Foreground(brightBlue),
+				FlashcardPending:  lipgloss.NewStyle().Foreground(cyan),
+				FlashcardRecall:   lipgloss.NewStyle().Foreground(brightYellow),
+				FlashcardPositive: lipgloss.NewStyle().Foreground(brightGreen),
+				FlashcardNegative: lipgloss.NewStyle().Foreground(brightRed),
 			},
 			Blurred: ContentBaseStyle{
-				Base:         lipgloss.NewStyle().Margin(0, 1),
-				TitleBar:     lipgloss.NewStyle().Background(black).Foreground(gray).Padding(0, 1),
-				Title:        lipgloss.NewStyle().Background(black).Foreground(gray).Margin(0, 0, 1, 1).Padding(0, 1),
-				Separator:    lipgloss.NewStyle().Foreground(gray).Margin(0, 0, 1, 1),
-				LineNumber:   lipgloss.NewStyle().Foreground(black),
-				EmptyHint:    lipgloss.NewStyle().Foreground(gray),
-				EmptyHintKey: lipgloss.NewStyle().Foreground(brightBlue),
+				Base:              lipgloss.NewStyle().Margin(0, 1),
+				TitleBar:          lipgloss.NewStyle().Background(black).Foreground(gray).Padding(0, 1),
+				Title:             lipgloss.NewStyle().Background(black).Foreground(gray).Margin(0, 0, 1, 1).Padding(0, 1),
+				Separator:         lipgloss.NewStyle().Foreground(gray).Margin(0, 0, 1, 1),
+				LineNumber:        lipgloss.NewStyle().Foreground(black),
+				EmptyHint:         lipgloss.NewStyle().Foreground(gray),
+				EmptyHintKey:      lipgloss.NewStyle().Foreground(brightBlue),
+				FlashcardPending:  lipgloss.NewStyle().Foreground(cyan),
+				FlashcardRecall:   lipgloss.NewStyle().Foreground(yellow),
+				FlashcardPositive: lipgloss.NewStyle().Foreground(green),
+				FlashcardNegative: lipgloss.NewStyle().Foreground(red),
 			},
 		},
 	}

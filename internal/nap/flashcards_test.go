@@ -72,6 +72,25 @@ func TestCreateFlashcardDeck(t *testing.T) {
 	}
 }
 
+func TestParseNativeFlashcardDeckV2(t *testing.T) {
+	deck, err := parseNativeFlashcardDeck([]byte(defaultNativeFlashcardDeckContent()))
+	if err != nil {
+		t.Fatalf("expected v2 deck to parse, got %v", err)
+	}
+	if len(deck.Cards) != 2 {
+		t.Fatalf("expected two cards, got %d", len(deck.Cards))
+	}
+	if deck.Cards[0].Type != nativeFlashcardTypeBasic {
+		t.Fatalf("expected first card to stay basic, got %q", deck.Cards[0].Type)
+	}
+	if deck.Cards[1].Type != nativeFlashcardTypeCodeCloze {
+		t.Fatalf("expected second card to be code-cloze, got %q", deck.Cards[1].Type)
+	}
+	if len(deck.Cards[1].Options) != 4 {
+		t.Fatalf("expected code-cloze options, got %#v", deck.Cards[1].Options)
+	}
+}
+
 func TestCurrentFlashcardDeckRejectsMultipleDecks(t *testing.T) {
 	m := newTestModel()
 	m.config.FlashcardsEnabled = true
@@ -147,6 +166,30 @@ func TestResetNativeFlashcardProgressOnDiskRemovesState(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected native state file to be removed, got err=%v", err)
+	}
+}
+
+func TestNativeFlashcardIndicatorStatesUsesRecallForHardGrade(t *testing.T) {
+	tmp := tmpHome(t)
+	folder := defaultSnippetFolder
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: folder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()}
+	if err := os.MkdirAll(filepath.Join(tmp, folder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, folder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write native deck: %v", err)
+	}
+	if err := writeNativeFlashcardState(tmp, deck, nativeFlashcardState{
+		Cards: map[string]nativeFlashcardProgress{
+			"linux-paging-4level-walk": {Reviews: 1, LastGrade: flashcardGradeHard, DueAt: time.Now().Add(24 * time.Hour)},
+		},
+	}); err != nil {
+		t.Fatalf("could not write native state: %v", err)
+	}
+
+	states := nativeFlashcardIndicatorStates(tmp, deck, time.Now())
+	if len(states) != 1 || states[0] != flashcardDeckRecall {
+		t.Fatalf("expected hard grade to produce recall state, got %#v", states)
 	}
 }
 
@@ -324,7 +367,7 @@ func TestGradeNativeFlashcardWritesState(t *testing.T) {
 	if cmd := m.reviewFlashcards(); cmd == nil {
 		t.Fatal("expected native review command")
 	}
-	m.flashcardSession.Revealed = true
+	m.flashcardSession.Phase = nativeFlashcardPhaseResult
 
 	if cmd := m.gradeNativeFlashcard(flashcardGradeGood); cmd == nil {
 		t.Fatal("expected native grading update")
@@ -384,6 +427,56 @@ func TestStopNativeFlashcardReviewRestoresContent(t *testing.T) {
 	}
 	if !strings.Contains(got.Code.View(), "review cards for this folder") {
 		t.Fatalf("expected folder dashboard to be restored, got %q", got.Code.View())
+	}
+}
+
+func TestSubmitSingleChoiceFlashcardAnswerShowsResult(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	content := `<!-- nap-deck: v2 -->
+
+<!-- id: mmap-private-anon -->
+<!-- type: code-cloze -->
+
+Prompt:
+Which flags create an anonymous private mapping?
+
+Options:
+- MAP_SHARED
+- MAP_FIXED
+- MAP_PRIVATE | MAP_ANONYMOUS
+- MAP_HUGETLB
+
+Answer:
+MAP_PRIVATE | MAP_ANONYMOUS
+`
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(content), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{Folder(defaultSnippetFolder)})
+	m.Folders.Select(0)
+
+	if cmd := m.reviewFlashcards(); cmd == nil {
+		t.Fatal("expected native review command")
+	}
+	m.flashcardSession.Cursor = 2
+	if cmd := m.submitNativeFlashcardAnswer(); cmd == nil {
+		t.Fatal("expected submit answer command")
+	}
+	if m.flashcardSession.Phase != nativeFlashcardPhaseResult {
+		t.Fatalf("expected result phase, got %v", m.flashcardSession.Phase)
+	}
+	if !m.flashcardSession.selected(2) {
+		t.Fatal("expected selected answer to be recorded")
 	}
 }
 
