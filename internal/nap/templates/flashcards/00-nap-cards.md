@@ -43,3 +43,23 @@ Explanation:
 
 Tags:
 linux/mm, mmap, virtual-memory
+
++++
+
+<!-- id: boot-path-order -->
+<!-- type: ordered-recall -->
+
+Prompt:
+Order the major steps from power-on to the kernel entry point on a typical x86_64 Linux boot path.
+
+Options:
+- Firmware initializes hardware and selects a boot target.
+- The bootloader loads the kernel image and initrd into memory.
+- The kernel decompresses, sets up early paging, and initializes subsystems.
+- Control transfers to the kernel entry point and early init continues.
+
+Explanation:
+This card is for rehearsing the sequence itself, not just recognizing individual boot components.
+
+Tags:
+x86_64/boot, linux/init, firmware

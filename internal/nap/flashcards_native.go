@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io/fs"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"slices"
@@ -38,10 +40,11 @@ type nativeFlashcardDeck struct {
 type nativeFlashcardType string
 
 const (
-	nativeFlashcardTypeBasic        nativeFlashcardType = "basic"
-	nativeFlashcardTypeSingleChoice nativeFlashcardType = "single-choice"
-	nativeFlashcardTypeMultiChoice  nativeFlashcardType = "multi-choice"
-	nativeFlashcardTypeCodeCloze    nativeFlashcardType = "code-cloze"
+	nativeFlashcardTypeBasic         nativeFlashcardType = "basic"
+	nativeFlashcardTypeSingleChoice  nativeFlashcardType = "single-choice"
+	nativeFlashcardTypeMultiChoice   nativeFlashcardType = "multi-choice"
+	nativeFlashcardTypeCodeCloze     nativeFlashcardType = "code-cloze"
+	nativeFlashcardTypeOrderedRecall nativeFlashcardType = "ordered-recall"
 )
 
 type nativeFlashcard struct {
@@ -91,14 +94,16 @@ const (
 )
 
 type nativeFlashcardReviewSession struct {
-	Deck       Snippet
-	Cards      []nativeFlashcard
-	Queue      []int
-	Position   int
-	Completed  int
-	Phase      nativeFlashcardReviewPhase
-	Cursor     int
-	Selections map[int]bool
+	Deck            Snippet
+	Cards           []nativeFlashcard
+	Queue           []int
+	Position        int
+	Completed       int
+	Phase           nativeFlashcardReviewPhase
+	Cursor          int
+	Selections      map[int]bool
+	DisplayOrder    []int
+	OrderedSequence []int
 }
 
 func defaultNativeFlashcardDeckContent() string {
@@ -336,7 +341,7 @@ func parseNativeFlashcardBlockV2(block string) (nativeFlashcard, error) {
 	card.Explanation = strings.TrimSpace(sections["Explanation"])
 	card.Options = parseNativeFlashcardListSection(sections["Options"])
 	card.CorrectOptions = parseNativeFlashcardListSection(sections["Correct"])
-	if len(card.CorrectOptions) == 0 && card.Answer != "" {
+	if card.Type != nativeFlashcardTypeOrderedRecall && len(card.CorrectOptions) == 0 && card.Answer != "" {
 		card.CorrectOptions = []string{card.Answer}
 	}
 	if tagsText := strings.TrimSpace(sections["Tags"]); tagsText != "" {
@@ -359,6 +364,14 @@ func parseNativeFlashcardBlockV2(block string) (nativeFlashcard, error) {
 		if len(card.Options) < 2 || len(card.CorrectOptions) == 0 {
 			return nativeFlashcard{}, fmt.Errorf("%w: multi-choice cards need options and at least one correct answer", errNativeFlashcardDeckInvalid)
 		}
+	case nativeFlashcardTypeOrderedRecall:
+		if len(card.Options) < 2 {
+			return nativeFlashcard{}, fmt.Errorf("%w: ordered-recall cards need at least two ordered steps", errNativeFlashcardDeckInvalid)
+		}
+		if card.Answer != "" || len(card.CorrectOptions) > 0 {
+			return nativeFlashcard{}, fmt.Errorf("%w: ordered-recall cards use the Options section as the canonical order", errNativeFlashcardDeckInvalid)
+		}
+		card.CorrectOptions = slices.Clone(card.Options)
 	}
 
 	return card, nil
@@ -527,13 +540,15 @@ func buildNativeFlashcardReviewSession(deck Snippet, parsed nativeFlashcardDeck,
 	if len(queue) == 0 {
 		return nil, errNativeFlashcardNoCardsDue
 	}
-	return &nativeFlashcardReviewSession{
+	session := &nativeFlashcardReviewSession{
 		Deck:       deck,
 		Cards:      slices.Clone(parsed.Cards),
 		Queue:      queue,
 		Phase:      nativeFlashcardPhaseQuestion,
 		Selections: map[int]bool{},
-	}, nil
+	}
+	session.prepareCurrentCard()
+	return session, nil
 }
 
 func scheduleNativeFlashcard(progress nativeFlashcardProgress, grade flashcardGrade, now time.Time) nativeFlashcardProgress {
@@ -748,12 +763,10 @@ func (m *Model) gradeNativeFlashcard(grade flashcardGrade) tea.Cmd {
 
 	m.flashcardSession.Completed++
 	m.flashcardSession.Position++
-	m.flashcardSession.Phase = nativeFlashcardPhaseQuestion
-	m.flashcardSession.Cursor = 0
-	clear(m.flashcardSession.Selections)
 	if m.flashcardSession.Position >= len(m.flashcardSession.Queue) {
 		return m.stopNativeFlashcardReview()
 	}
+	m.flashcardSession.prepareCurrentCard()
 
 	return m.updateContent()
 }
@@ -770,7 +783,18 @@ func (m *Model) moveNativeFlashcardSelection(delta int) tea.Cmd {
 	if optionCount == 0 {
 		return nil
 	}
-	m.flashcardSession.Cursor = (m.flashcardSession.Cursor + delta + optionCount) % optionCount
+	positions := m.flashcardSession.selectableCursorPositions(card)
+	if len(positions) == 0 {
+		return nil
+	}
+	current := 0
+	for idx, position := range positions {
+		if position == m.flashcardSession.Cursor {
+			current = idx
+			break
+		}
+	}
+	m.flashcardSession.Cursor = positions[(current+delta+len(positions))%len(positions)]
 	return m.updateContent()
 }
 
@@ -785,7 +809,10 @@ func (m *Model) toggleNativeFlashcardSelection() tea.Cmd {
 	if m.flashcardSession.Selections == nil {
 		m.flashcardSession.Selections = map[int]bool{}
 	}
-	index := m.flashcardSession.Cursor
+	index, ok := m.flashcardSession.optionIndexAtCursor(card)
+	if !ok {
+		return nil
+	}
 	if m.flashcardSession.Selections[index] {
 		delete(m.flashcardSession.Selections, index)
 	} else {
@@ -803,15 +830,70 @@ func (m *Model) submitNativeFlashcardAnswer() tea.Cmd {
 	case nativeFlashcardTypeBasic:
 		m.flashcardSession.Phase = nativeFlashcardPhaseResult
 	case nativeFlashcardTypeSingleChoice, nativeFlashcardTypeCodeCloze:
-		m.flashcardSession.Selections = map[int]bool{m.flashcardSession.Cursor: true}
+		index, ok := m.flashcardSession.optionIndexAtCursor(card)
+		if !ok {
+			return nil
+		}
+		m.flashcardSession.Selections = map[int]bool{index: true}
 		m.flashcardSession.Phase = nativeFlashcardPhaseResult
 	case nativeFlashcardTypeMultiChoice:
 		if len(m.flashcardSession.Selections) == 0 {
 			return nil
 		}
 		m.flashcardSession.Phase = nativeFlashcardPhaseResult
+	case nativeFlashcardTypeOrderedRecall:
+		if !m.flashcardSession.orderedRecallComplete(card) {
+			return m.appendNativeFlashcardOrderedStep()
+		}
+		m.flashcardSession.Phase = nativeFlashcardPhaseResult
 	default:
 		return nil
+	}
+	return m.updateContent()
+}
+
+func (m *Model) appendNativeFlashcardOrderedStep() tea.Cmd {
+	if m.flashcardSession == nil || m.flashcardSession.Phase != nativeFlashcardPhaseQuestion {
+		return nil
+	}
+	card := m.flashcardSession.currentCard()
+	if card.Type != nativeFlashcardTypeOrderedRecall {
+		return nil
+	}
+	if m.flashcardSession.orderedRecallComplete(card) {
+		return nil
+	}
+	index, ok := m.flashcardSession.optionIndexAtCursor(card)
+	if !ok || m.flashcardSession.selected(index) {
+		return nil
+	}
+	if m.flashcardSession.Selections == nil {
+		m.flashcardSession.Selections = map[int]bool{}
+	}
+	m.flashcardSession.Selections[index] = true
+	m.flashcardSession.OrderedSequence = append(m.flashcardSession.OrderedSequence, index)
+	if next, ok := m.flashcardSession.firstSelectableCursorPosition(card); ok {
+		m.flashcardSession.Cursor = next
+	}
+	return m.updateContent()
+}
+
+func (m *Model) removeNativeFlashcardOrderedStep() tea.Cmd {
+	if m.flashcardSession == nil || m.flashcardSession.Phase != nativeFlashcardPhaseQuestion {
+		return nil
+	}
+	card := m.flashcardSession.currentCard()
+	if card.Type != nativeFlashcardTypeOrderedRecall || len(m.flashcardSession.OrderedSequence) == 0 {
+		return nil
+	}
+	last := m.flashcardSession.OrderedSequence[len(m.flashcardSession.OrderedSequence)-1]
+	m.flashcardSession.OrderedSequence = m.flashcardSession.OrderedSequence[:len(m.flashcardSession.OrderedSequence)-1]
+	delete(m.flashcardSession.Selections, last)
+	for position, index := range m.flashcardSession.displayOrder(card) {
+		if index == last {
+			m.flashcardSession.Cursor = position
+			break
+		}
 	}
 	return m.updateContent()
 }
@@ -851,10 +933,14 @@ func (m *Model) renderNativeFlashcardOptions(card nativeFlashcard) []string {
 	if !card.hasOptions() {
 		return nil
 	}
+	if card.Type == nativeFlashcardTypeOrderedRecall {
+		return m.renderNativeFlashcardOrderedRecallOptions(card)
+	}
 	lines := []string{m.ContentStyle.EmptyHint.Render("options"), ""}
-	for idx, option := range card.Options {
+	for position, idx := range m.flashcardSession.displayOrder(card) {
+		option := card.Options[idx]
 		prefix := "  "
-		if m.flashcardSession.Phase == nativeFlashcardPhaseQuestion && idx == m.flashcardSession.Cursor {
+		if m.flashcardSession.Phase == nativeFlashcardPhaseQuestion && position == m.flashcardSession.Cursor {
 			prefix = "> "
 		}
 		selection := "[ ]"
@@ -876,14 +962,53 @@ func (m *Model) renderNativeFlashcardOptions(card nativeFlashcard) []string {
 	return lines
 }
 
+func (m *Model) renderNativeFlashcardOrderedRecallOptions(card nativeFlashcard) []string {
+	if m.flashcardSession.Phase == nativeFlashcardPhaseResult {
+		return nil
+	}
+	lines := []string{m.ContentStyle.EmptyHint.Render("build order"), ""}
+	selected := m.flashcardSession.selectedOptionTexts(card)
+	if len(selected) == 0 {
+		lines = append(lines, m.ContentStyle.EmptyHint.Render("  no steps chosen yet"))
+	} else {
+		lines = append(lines, numberedFlashcardLines(selected)...)
+	}
+	lines = append(lines, "", m.ContentStyle.EmptyHint.Render("remaining steps"), "")
+	remaining := 0
+	for position, idx := range m.flashcardSession.displayOrder(card) {
+		if m.flashcardSession.selected(idx) {
+			continue
+		}
+		remaining++
+		prefix := "  "
+		if m.flashcardSession.Phase == nativeFlashcardPhaseQuestion && position == m.flashcardSession.Cursor {
+			prefix = "> "
+		}
+		lines = append(lines, fmt.Sprintf("%s[ ] %s", prefix, card.Options[idx]))
+	}
+	if remaining == 0 {
+		lines = append(lines, m.ContentStyle.EmptyHint.Render("  all steps chosen - press enter to submit"))
+	}
+	lines = append(lines, "")
+	return lines
+}
+
 func (m *Model) renderNativeFlashcardResult(card nativeFlashcard) []string {
 	if m.flashcardSession.Phase != nativeFlashcardPhaseResult {
 		return nil
 	}
+	label := m.nativeFlashcardResultLabel(card)
 	lines := []string{
-		m.ContentStyle.EmptyHint.Render(fmt.Sprintf("result      %s", m.nativeFlashcardResultLabel(card))),
+		m.ContentStyle.EmptyHint.Render("result      ") + m.renderNativeFlashcardResultLabel(label),
 	}
-	if card.Answer != "" {
+	if card.Type == nativeFlashcardTypeOrderedRecall {
+		lines = append(lines,
+			"",
+			m.ContentStyle.EmptyHint.Render("order check"),
+			"",
+		)
+		lines = append(lines, m.renderNativeFlashcardOrderedRecallCheck(card)...)
+	} else if card.Answer != "" {
 		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("answer"), "", card.Answer)
 	} else if len(card.CorrectOptions) > 0 {
 		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("correct"), "", strings.Join(card.CorrectOptions, "\n"))
@@ -900,9 +1025,41 @@ func (m *Model) renderNativeFlashcardResult(card nativeFlashcard) []string {
 	return lines
 }
 
+func (m *Model) renderNativeFlashcardOrderedRecallCheck(card nativeFlashcard) []string {
+	selectedPositions := m.flashcardSession.orderedRecallPositions()
+	lines := make([]string, 0, len(card.CorrectOptions))
+	for idx, step := range card.CorrectOptions {
+		status := "[✓]"
+		suffix := ""
+		if selectedAt, ok := selectedPositions[step]; ok && selectedAt != idx {
+			status = "[x]"
+			suffix = fmt.Sprintf(" (you put it at %d)", selectedAt+1)
+		}
+		lines = append(lines, fmt.Sprintf("%s %d. %s%s", status, idx+1, step, suffix))
+	}
+	return lines
+}
+
+func (m *Model) renderNativeFlashcardResultLabel(label string) string {
+	switch label {
+	case "correct":
+		return m.ContentStyle.FlashcardPositive.Render(label)
+	case "incorrect":
+		return m.ContentStyle.FlashcardNegative.Render(label)
+	default:
+		return m.ContentStyle.FlashcardPending.Render(label)
+	}
+}
+
 func (m *Model) nativeFlashcardResultLabel(card nativeFlashcard) string {
 	if card.Type == nativeFlashcardTypeBasic {
 		return "revealed"
+	}
+	if card.Type == nativeFlashcardTypeOrderedRecall {
+		if card.isCorrectOrderedSelection(m.flashcardSession.selectedOptionTexts(card)) {
+			return "correct"
+		}
+		return "incorrect"
 	}
 	if card.isCorrectSelection(m.flashcardSession.selectedOptionTexts(card)) {
 		return "correct"
@@ -926,6 +1083,17 @@ func (m *Model) nativeFlashcardHints(card nativeFlashcard) []keyHint {
 				{binding: keyBinding("enter", "submit answer"), help: "submit answer"},
 				{binding: keyBinding("esc", "stop review"), help: "stop review"},
 			}
+		case nativeFlashcardTypeOrderedRecall:
+			action := "add step"
+			if m.flashcardSession.orderedRecallComplete(card) {
+				action = "submit order"
+			}
+			return []keyHint{
+				{binding: keyBinding("↑/↓", "move"), help: "move"},
+				{binding: keyBinding("enter/space", action), help: action},
+				{binding: keyBinding("backspace", "remove last step"), help: "remove last step"},
+				{binding: keyBinding("esc", "stop review"), help: "stop review"},
+			}
 		default:
 			return []keyHint{
 				{binding: keyBinding("↑/↓", "move"), help: "move"},
@@ -946,7 +1114,7 @@ func keyBinding(keyName, helpText string) key.Binding {
 
 func (t nativeFlashcardType) valid() bool {
 	switch t {
-	case nativeFlashcardTypeBasic, nativeFlashcardTypeSingleChoice, nativeFlashcardTypeMultiChoice, nativeFlashcardTypeCodeCloze:
+	case nativeFlashcardTypeBasic, nativeFlashcardTypeSingleChoice, nativeFlashcardTypeMultiChoice, nativeFlashcardTypeCodeCloze, nativeFlashcardTypeOrderedRecall:
 		return true
 	default:
 		return false
@@ -983,8 +1151,44 @@ func (c nativeFlashcard) isCorrectSelection(selected []string) bool {
 	return slices.Equal(want, got)
 }
 
+func (c nativeFlashcard) isCorrectOrderedSelection(selected []string) bool {
+	if len(selected) != len(c.CorrectOptions) {
+		return false
+	}
+	for idx, answer := range c.CorrectOptions {
+		if strings.TrimSpace(answer) != strings.TrimSpace(selected[idx]) {
+			return false
+		}
+	}
+	return true
+}
+
+func numberedFlashcardLines(values []string) []string {
+	lines := make([]string, 0, len(values))
+	for idx, value := range values {
+		lines = append(lines, fmt.Sprintf(" %d. %s", idx+1, value))
+	}
+	return lines
+}
+
 func (s *nativeFlashcardReviewSession) currentCard() nativeFlashcard {
 	return s.Cards[s.Queue[s.Position]]
+}
+
+func (s *nativeFlashcardReviewSession) prepareCurrentCard() {
+	if len(s.Queue) == 0 || s.Position >= len(s.Queue) {
+		return
+	}
+	card := s.currentCard()
+	s.Phase = nativeFlashcardPhaseQuestion
+	s.Selections = map[int]bool{}
+	s.OrderedSequence = nil
+	s.DisplayOrder = nativeFlashcardDisplayOrder(card)
+	if cursor, ok := s.firstSelectableCursorPosition(card); ok {
+		s.Cursor = cursor
+	} else {
+		s.Cursor = 0
+	}
 }
 
 func (s *nativeFlashcardReviewSession) selected(index int) bool {
@@ -995,14 +1199,108 @@ func (s *nativeFlashcardReviewSession) selected(index int) bool {
 }
 
 func (s *nativeFlashcardReviewSession) selectedOptionTexts(card nativeFlashcard) []string {
+	if card.Type == nativeFlashcardTypeOrderedRecall {
+		if len(s.OrderedSequence) == 0 {
+			return nil
+		}
+		answers := make([]string, 0, len(s.OrderedSequence))
+		for _, idx := range s.OrderedSequence {
+			if idx >= 0 && idx < len(card.Options) {
+				answers = append(answers, card.Options[idx])
+			}
+		}
+		return answers
+	}
 	if len(s.Selections) == 0 {
 		return nil
 	}
 	answers := make([]string, 0, len(s.Selections))
-	for idx := range s.Selections {
-		if idx >= 0 && idx < len(card.Options) {
+	for idx := range card.Options {
+		if s.selected(idx) {
 			answers = append(answers, card.Options[idx])
 		}
 	}
 	return answers
+}
+
+func (s *nativeFlashcardReviewSession) displayOrder(card nativeFlashcard) []int {
+	if len(s.DisplayOrder) == len(card.Options) {
+		return s.DisplayOrder
+	}
+	order := make([]int, len(card.Options))
+	for idx := range order {
+		order[idx] = idx
+	}
+	return order
+}
+
+func (s *nativeFlashcardReviewSession) optionIndexAtCursor(card nativeFlashcard) (int, bool) {
+	order := s.displayOrder(card)
+	if s.Cursor < 0 || s.Cursor >= len(order) {
+		return 0, false
+	}
+	return order[s.Cursor], true
+}
+
+func (s *nativeFlashcardReviewSession) selectableCursorPositions(card nativeFlashcard) []int {
+	order := s.displayOrder(card)
+	positions := make([]int, 0, len(order))
+	for position, idx := range order {
+		if card.Type == nativeFlashcardTypeOrderedRecall && s.selected(idx) {
+			continue
+		}
+		positions = append(positions, position)
+	}
+	return positions
+}
+
+func (s *nativeFlashcardReviewSession) firstSelectableCursorPosition(card nativeFlashcard) (int, bool) {
+	positions := s.selectableCursorPositions(card)
+	if len(positions) == 0 {
+		return 0, false
+	}
+	return positions[0], true
+}
+
+func (s *nativeFlashcardReviewSession) orderedRecallComplete(card nativeFlashcard) bool {
+	return card.Type == nativeFlashcardTypeOrderedRecall && len(s.OrderedSequence) == len(card.Options)
+}
+
+func (s *nativeFlashcardReviewSession) orderedRecallPositions() map[string]int {
+	positions := make(map[string]int, len(s.OrderedSequence))
+	card := s.currentCard()
+	for pos, idx := range s.OrderedSequence {
+		if idx >= 0 && idx < len(card.Options) {
+			positions[card.Options[idx]] = pos
+		}
+	}
+	return positions
+}
+
+func nativeFlashcardDisplayOrder(card nativeFlashcard) []int {
+	order := make([]int, len(card.Options))
+	for idx := range order {
+		order[idx] = idx
+	}
+	if card.Type != nativeFlashcardTypeOrderedRecall || len(order) < 2 {
+		return order
+	}
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(card.ID))
+	source := rand.NewSource(int64(hasher.Sum64()))
+	shuffled := rand.New(source)
+	shuffled.Shuffle(len(order), func(i, j int) {
+		order[i], order[j] = order[j], order[i]
+	})
+	identity := true
+	for idx, value := range order {
+		if idx != value {
+			identity = false
+			break
+		}
+	}
+	if identity {
+		order[0], order[1] = order[1], order[0]
+	}
+	return order
 }

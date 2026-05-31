@@ -616,6 +616,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.submitNativeFlashcardAnswer()
 			case msg.String() == "enter":
 				return m, m.submitNativeFlashcardAnswer()
+			case msg.String() == "backspace" || msg.String() == "delete":
+				return m, m.removeNativeFlashcardOrderedStep()
 			case msg.String() == "1":
 				return m, m.gradeNativeFlashcard(flashcardGradeAgain)
 			case msg.String() == "2":

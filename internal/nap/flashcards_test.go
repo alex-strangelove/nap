@@ -77,8 +77,8 @@ func TestParseNativeFlashcardDeckV2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected v2 deck to parse, got %v", err)
 	}
-	if len(deck.Cards) != 2 {
-		t.Fatalf("expected two cards, got %d", len(deck.Cards))
+	if len(deck.Cards) != 3 {
+		t.Fatalf("expected three cards, got %d", len(deck.Cards))
 	}
 	if deck.Cards[0].Type != nativeFlashcardTypeBasic {
 		t.Fatalf("expected first card to stay basic, got %q", deck.Cards[0].Type)
@@ -88,6 +88,166 @@ func TestParseNativeFlashcardDeckV2(t *testing.T) {
 	}
 	if len(deck.Cards[1].Options) != 4 {
 		t.Fatalf("expected code-cloze options, got %#v", deck.Cards[1].Options)
+	}
+	if deck.Cards[2].Type != nativeFlashcardTypeOrderedRecall {
+		t.Fatalf("expected third card to be ordered-recall, got %q", deck.Cards[2].Type)
+	}
+	if len(deck.Cards[2].CorrectOptions) != len(deck.Cards[2].Options) {
+		t.Fatalf("expected ordered-recall options to define the correct order, got %#v", deck.Cards[2].CorrectOptions)
+	}
+}
+
+func TestParseOrderedRecallRejectsAnswerSection(t *testing.T) {
+	content := `<!-- nap-deck: v2 -->
+
+<!-- id: boot-order -->
+<!-- type: ordered-recall -->
+
+Prompt:
+Order the steps.
+
+Options:
+- firmware
+- bootloader
+
+Answer:
+firmware
+`
+
+	if _, err := parseNativeFlashcardDeck([]byte(content)); err == nil {
+		t.Fatal("expected ordered-recall card with answer section to be rejected")
+	}
+}
+
+func TestSubmitOrderedRecallFlashcardShowsResult(t *testing.T) {
+	m := newTestModel()
+	m.flashcardSession = orderedRecallTestSession(t, orderedRecallDeckContent())
+
+	card := m.flashcardSession.currentCard()
+	for want := range card.Options {
+		m.flashcardSession.Cursor = orderedRecallCursorForOption(t, m.flashcardSession, card, want)
+		if cmd := m.submitNativeFlashcardAnswer(); cmd == nil {
+			t.Fatal("expected ordered recall step selection to trigger a render")
+		}
+	}
+	if m.flashcardSession.Phase != nativeFlashcardPhaseQuestion {
+		t.Fatalf("expected ordered recall to stay in question phase until submission, got %v", m.flashcardSession.Phase)
+	}
+	if cmd := m.submitNativeFlashcardAnswer(); cmd == nil {
+		t.Fatal("expected final ordered recall submission command")
+	}
+	if m.flashcardSession.Phase != nativeFlashcardPhaseResult {
+		t.Fatalf("expected result phase, got %v", m.flashcardSession.Phase)
+	}
+	if got := m.nativeFlashcardResultLabel(card); got != "correct" {
+		t.Fatalf("expected ordered recall result to be correct, got %q", got)
+	}
+}
+
+func TestOrderedRecallIncorrectSequenceShowsIncorrect(t *testing.T) {
+	m := newTestModel()
+	m.flashcardSession = orderedRecallTestSession(t, orderedRecallDeckContent())
+
+	card := m.flashcardSession.currentCard()
+	for want := len(card.Options) - 1; want >= 0; want-- {
+		m.flashcardSession.Cursor = orderedRecallCursorForOption(t, m.flashcardSession, card, want)
+		if cmd := m.submitNativeFlashcardAnswer(); cmd == nil {
+			t.Fatal("expected ordered recall step selection to trigger a render")
+		}
+	}
+	if cmd := m.submitNativeFlashcardAnswer(); cmd == nil {
+		t.Fatal("expected final ordered recall submission command")
+	}
+	if got := m.nativeFlashcardResultLabel(card); got != "incorrect" {
+		t.Fatalf("expected ordered recall result to be incorrect, got %q", got)
+	}
+}
+
+func TestOrderedRecallResultUsesCompactComparison(t *testing.T) {
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.state = reviewingFlashcardsState
+	m.flashcardSession = orderedRecallTestSession(t, orderedRecallDeckContent())
+
+	card := m.flashcardSession.currentCard()
+	for want := len(card.Options) - 1; want >= 0; want-- {
+		m.flashcardSession.Cursor = orderedRecallCursorForOption(t, m.flashcardSession, card, want)
+		if cmd := m.submitNativeFlashcardAnswer(); cmd == nil {
+			t.Fatal("expected ordered recall step selection to trigger a render")
+		} else {
+			m = runModelCmd(m, cmd)
+		}
+	}
+	if cmd := m.submitNativeFlashcardAnswer(); cmd == nil {
+		t.Fatal("expected final ordered recall submission command")
+	} else {
+		m = runModelCmd(m, cmd)
+	}
+
+	view := m.Code.View()
+	if !strings.Contains(view, "order check") {
+		t.Fatalf("expected compact ordered recall comparison, got %q", view)
+	}
+	if !strings.Contains(view, "you put it at 3") {
+		t.Fatalf("expected ordered recall mismatch note, got %q", view)
+	}
+	if strings.Contains(view, "build order") || strings.Contains(view, "your order") || strings.Contains(view, "correct order") {
+		t.Fatalf("expected verbose ordered recall sections to be removed from result view, got %q", view)
+	}
+}
+
+func TestGradeOrderedRecallResetsSequenceForNextCard(t *testing.T) {
+	tmp := tmpHome(t)
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create snippet folder: %v", err)
+	}
+
+	m := newTestModel()
+	m.config.Home = tmp
+	m.flashcardSession = orderedRecallTestSession(t, orderedRecallDeckContent()+`
+
++++
+
+<!-- id: next-basic -->
+<!-- type: basic -->
+
+Prompt:
+What does CR3 point to?
+
+Answer:
+The base of the top-level page table.
+`)
+
+	card := m.flashcardSession.currentCard()
+	for want := range card.Options {
+		m.flashcardSession.Cursor = orderedRecallCursorForOption(t, m.flashcardSession, card, want)
+		if cmd := m.submitNativeFlashcardAnswer(); cmd == nil {
+			t.Fatal("expected ordered recall step selection to trigger a render")
+		}
+	}
+	if cmd := m.submitNativeFlashcardAnswer(); cmd == nil {
+		t.Fatal("expected ordered recall submission command")
+	}
+	if cmd := m.gradeNativeFlashcard(flashcardGradeGood); cmd == nil {
+		t.Fatal("expected grading command")
+	}
+	if got := m.flashcardSession.currentCard().ID; got != "next-basic" {
+		t.Fatalf("expected grading to advance to the next card, got %q", got)
+	}
+	if len(m.flashcardSession.OrderedSequence) != 0 {
+		t.Fatalf("expected ordered recall sequence to reset, got %#v", m.flashcardSession.OrderedSequence)
+	}
+	if len(m.flashcardSession.Selections) != 0 {
+		t.Fatalf("expected selections to reset, got %#v", m.flashcardSession.Selections)
+	}
+}
+
+func TestRemoveNativeFlashcardOrderedStepNoopWhenEmpty(t *testing.T) {
+	m := newTestModel()
+	m.flashcardSession = orderedRecallTestSession(t, orderedRecallDeckContent())
+
+	if cmd := m.removeNativeFlashcardOrderedStep(); cmd != nil {
+		t.Fatalf("expected removing from an empty ordered sequence to be a no-op, got %T", cmd())
 	}
 }
 
@@ -471,12 +631,66 @@ MAP_PRIVATE | MAP_ANONYMOUS
 	m.flashcardSession.Cursor = 2
 	if cmd := m.submitNativeFlashcardAnswer(); cmd == nil {
 		t.Fatal("expected submit answer command")
+	} else {
+		m = runModelCmd(m, cmd)
 	}
 	if m.flashcardSession.Phase != nativeFlashcardPhaseResult {
 		t.Fatalf("expected result phase, got %v", m.flashcardSession.Phase)
 	}
 	if !m.flashcardSession.selected(2) {
 		t.Fatal("expected selected answer to be recorded")
+	}
+	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardPositive.Render("correct")) {
+		t.Fatalf("expected correct result label to be highlighted, got %q", view)
+	}
+}
+
+func TestNativeFlashcardIncorrectResultUsesNegativeStyle(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	content := `<!-- nap-deck: v2 -->
+
+<!-- id: mmap-private-anon -->
+<!-- type: code-cloze -->
+
+Prompt:
+Which flags create an anonymous private mapping?
+
+Options:
+- MAP_SHARED
+- MAP_FIXED
+- MAP_PRIVATE | MAP_ANONYMOUS
+- MAP_HUGETLB
+
+Answer:
+MAP_PRIVATE | MAP_ANONYMOUS
+`
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(content), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{Folder(defaultSnippetFolder)})
+	m.Folders.Select(0)
+
+	if cmd := m.reviewFlashcards(); cmd == nil {
+		t.Fatal("expected native review command")
+	}
+	m.flashcardSession.Cursor = 0
+	if cmd := m.submitNativeFlashcardAnswer(); cmd == nil {
+		t.Fatal("expected submit answer command")
+	} else {
+		m = runModelCmd(m, cmd)
+	}
+	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardNegative.Render("incorrect")) {
+		t.Fatalf("expected incorrect result label to be highlighted, got %q", view)
 	}
 }
 
@@ -509,4 +723,57 @@ func TestOpenFlashcardsOnPaneLeftIgnoresHiddenDecksWhenFolderIsSelected(t *testi
 	if cmd := m.openFlashcardsOnPaneLeft(); cmd != nil {
 		t.Fatalf("expected hidden flashcards to stay off the tree/dashboard flow, got %T", cmd())
 	}
+}
+
+func orderedRecallTestSession(t *testing.T, content string) *nativeFlashcardReviewSession {
+	t.Helper()
+
+	parsed, err := parseNativeFlashcardDeck([]byte(content))
+	if err != nil {
+		t.Fatalf("could not parse ordered recall deck: %v", err)
+	}
+	session, err := buildNativeFlashcardReviewSession(
+		Snippet{
+			Name:     nativeFlashcardDeckStem,
+			Folder:   defaultSnippetFolder,
+			File:     nativeFlashcardDeckStem + ".md",
+			Language: "md",
+			Date:     time.Now(),
+		},
+		parsed,
+		nativeFlashcardState{Cards: map[string]nativeFlashcardProgress{}},
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("could not build ordered recall session: %v", err)
+	}
+	return session
+}
+
+func orderedRecallCursorForOption(t *testing.T, session *nativeFlashcardReviewSession, card nativeFlashcard, want int) int {
+	t.Helper()
+
+	for position, idx := range session.displayOrder(card) {
+		if idx == want {
+			return position
+		}
+	}
+	t.Fatalf("could not find option %d in display order %#v", want, session.displayOrder(card))
+	return 0
+}
+
+func orderedRecallDeckContent() string {
+	return `<!-- nap-deck: v2 -->
+
+<!-- id: boot-order -->
+<!-- type: ordered-recall -->
+
+Prompt:
+Order the boot steps.
+
+Options:
+- firmware
+- bootloader
+- kernel
+`
 }
