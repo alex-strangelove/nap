@@ -46,6 +46,53 @@ linux/mm, mmap, virtual-memory
 
 +++
 
+<!-- id: tlb-shootdown-trigger -->
+<!-- type: single-choice -->
+
+Prompt:
+Which event usually forces other CPUs to invalidate a stale TLB entry for a shared userspace mapping?
+
+Options:
+- Updating a PTE and sending the matching inter-processor invalidation.
+- Reading `/proc/meminfo`.
+- Returning from a syscall without touching page tables.
+- Incrementing a process-local file descriptor table.
+
+Correct:
+- Updating a PTE and sending the matching inter-processor invalidation.
+
+Explanation:
+When one CPU changes a translation that other CPUs may have cached, the kernel coordinates a TLB shootdown so those stale entries are dropped.
+
+Tags:
+linux/mm, tlb, smp
+
++++
+
+<!-- id: page-fault-major-signals -->
+<!-- type: multi-choice -->
+
+Prompt:
+Which signals suggest a page fault was major rather than minor?
+
+Options:
+- Disk or filesystem I/O was needed to bring the page in.
+- The mapping was satisfied entirely from an already resident page cache entry.
+- The fault path stalled waiting for backing storage.
+- No new page contents had to be fetched from storage.
+
+Correct:
+- Disk or filesystem I/O was needed to bring the page in.
+- The fault path stalled waiting for backing storage.
+
+Explanation:
+Major faults need backing data to be loaded, so they often incur storage latency. Minor faults only fix up mappings for pages already resident in memory.
+
+Tags:
+linux/mm, page-faults, performance
+
++++
+
 <!-- id: boot-path-order -->
 <!-- type: ordered-recall -->
 

@@ -123,6 +123,40 @@ func TestFlashcardShortHelpOnlyShowsEnabledActions(t *testing.T) {
 	}
 }
 
+func TestDraftFlashcardEnabledForRegularSnippet(t *testing.T) {
+	m := newTestModel()
+	m.config.FlashcardsEnabled = true
+	snippet := defaultSnippet
+	m.Folders.SetItems([]list.Item{snippet})
+	m.Folders.Select(0)
+	m.selectSnippetInFolder(Folder(defaultSnippetFolder), snippet)
+	m.updateKeyMap()
+
+	if !m.keys.DraftFlashcard.Enabled() {
+		t.Fatal("draft flashcard key should be enabled for a regular snippet")
+	}
+
+	view := m.help.ShortHelpView(m.keys.ShortHelp())
+	if !strings.Contains(view, "g") || !strings.Contains(view, "draft card") {
+		t.Fatalf("draft flashcard hint missing from short help, got %q", view)
+	}
+}
+
+func TestDraftFlashcardDisabledForDeckSnippet(t *testing.T) {
+	m := newTestModel()
+	m.config.FlashcardsEnabled = true
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{deck})
+	m.Folders.Select(0)
+	m.selectSnippetInFolder(Folder(defaultSnippetFolder), deck)
+	m.updateKeyMap()
+
+	if m.keys.DraftFlashcard.Enabled() {
+		t.Fatal("draft flashcard key should be disabled for the deck snippet itself")
+	}
+}
+
 func TestReviewFlashcardsDisabledWithoutDeck(t *testing.T) {
 	m := newTestModel()
 	m.config.FlashcardsEnabled = true
@@ -1496,10 +1530,10 @@ func TestFolderDashboardShowsFlashcardReadyStatus(t *testing.T) {
 	if view := m.Code.View(); !strings.Contains(view, "flashcards  ready to review") {
 		t.Fatalf("expected ready flashcards status in dashboard, got %q", view)
 	}
-	if view := m.Code.View(); !strings.Contains(view, "cards       4 root, 0 nested") {
+	if view := m.Code.View(); !strings.Contains(view, "cards       6 root, 0 nested") {
 		t.Fatalf("expected flashcard count in dashboard, got %q", view)
 	}
-	if view := m.Code.View(); !strings.Contains(view, "results     0 correct, 0 recall, 0 incorrect, 4 pending") {
+	if view := m.Code.View(); !strings.Contains(view, "results     0 correct, 0 recall, 0 incorrect, 6 pending") {
 		t.Fatalf("expected flashcard result counts in dashboard, got %q", view)
 	}
 	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardPositive.Render("0 correct")) {
@@ -1511,7 +1545,7 @@ func TestFolderDashboardShowsFlashcardReadyStatus(t *testing.T) {
 	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardNegative.Render("0 incorrect")) {
 		t.Fatalf("expected incorrect count to use negative style, got %q", view)
 	}
-	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardPending.Render("4 pending")) {
+	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardPending.Render("6 pending")) {
 		t.Fatalf("expected pending count to use pending style, got %q", view)
 	}
 	if view := m.Code.View(); strings.Contains(view, "remaining   ") {
@@ -1590,7 +1624,7 @@ func TestFolderDashboardShowsRecallCountForHardReviews(t *testing.T) {
 	m.Folders.Select(0)
 
 	m.displayFolderDashboard()
-	if view := m.Code.View(); !strings.Contains(view, "results     1 correct, 1 recall, 0 incorrect, 2 pending") {
+	if view := m.Code.View(); !strings.Contains(view, "results     1 correct, 1 recall, 0 incorrect, 4 pending") {
 		t.Fatalf("expected recall count in dashboard, got %q", view)
 	}
 	if view := m.Code.View(); strings.Contains(view, "remaining   ") {

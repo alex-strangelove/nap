@@ -112,6 +112,138 @@ func defaultNativeFlashcardDeckContent() string {
 	return defaultNativeFlashcardDeckTemplate
 }
 
+func appendNativeFlashcardDraft(path string, source Snippet, content string) error {
+	deckContent, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	updated := strings.TrimRight(string(deckContent), "\n")
+	if strings.TrimSpace(updated) == "" {
+		updated = nativeFlashcardHeaderLineV2
+	}
+	updated += "\n\n+++\n\n" + nativeFlashcardDraftBlock(source, string(deckContent), content) + "\n"
+	return os.WriteFile(path, []byte(updated), 0o644)
+}
+
+func nativeFlashcardDraftBlock(source Snippet, existingDeckContent string, snippetContent string) string {
+	id := nextNativeFlashcardDraftID(source, existingDeckContent)
+	title := strings.TrimSpace(source.Name)
+	if title == "" {
+		title = strings.TrimSpace(strings.TrimSuffix(source.File, filepath.Ext(source.File)))
+	}
+	if title == "" {
+		title = "snippet"
+	}
+
+	answer := "TODO: replace this with the key fact, sequence, or invariant you want to remember."
+	if trimmed := strings.TrimSpace(strings.ReplaceAll(snippetContent, "\r\n", "\n")); trimmed != "" {
+		answer += "\n\n" + nativeFlashcardDraftCodeFence(source.Language, nativeFlashcardDraftEscapeSnippetContent(trimmed))
+	}
+
+	var builder strings.Builder
+	builder.WriteString("<!-- id: ")
+	builder.WriteString(id)
+	builder.WriteString(" -->\n")
+	builder.WriteString("<!-- type: basic -->\n\n")
+	builder.WriteString("Prompt:\n")
+	builder.WriteString("What should you remember about `")
+	builder.WriteString(title)
+	builder.WriteString("`?\n\n")
+	builder.WriteString("Answer:\n")
+	builder.WriteString(answer)
+	builder.WriteString("\n\nExplanation:\n")
+	builder.WriteString("Drafted from snippet `")
+	builder.WriteString(source.Path())
+	builder.WriteString("`. Narrow this into a smaller recall target before reviewing.\n\n")
+	builder.WriteString("Tags:\n")
+	builder.WriteString("authoring/draft")
+	if language := strings.TrimSpace(source.Language); language != "" {
+		builder.WriteString(", lang/")
+		builder.WriteString(language)
+	}
+	return builder.String()
+}
+
+func nextNativeFlashcardDraftID(source Snippet, existingDeckContent string) string {
+	base := nativeFlashcardSlug(strings.TrimSpace(source.Name))
+	if base == "" {
+		base = nativeFlashcardSlug(strings.TrimSpace(strings.TrimSuffix(source.File, filepath.Ext(source.File))))
+	}
+	if base == "" {
+		base = "snippet"
+	}
+	base = "draft-" + base
+
+	existing := existingNativeFlashcardIDs(existingDeckContent)
+	if _, ok := existing[base]; !ok {
+		return base
+	}
+	for suffix := 2; ; suffix++ {
+		candidate := fmt.Sprintf("%s-%d", base, suffix)
+		if _, ok := existing[candidate]; !ok {
+			return candidate
+		}
+	}
+}
+
+func existingNativeFlashcardIDs(content string) map[string]struct{} {
+	ids := map[string]struct{}{}
+	for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		key, value, ok := parseNativeFlashcardCommentMetadata(strings.TrimSpace(line))
+		if !ok || key != "id" || value == "" {
+			continue
+		}
+		ids[value] = struct{}{}
+	}
+	return ids
+}
+
+func nativeFlashcardSlug(value string) string {
+	var builder strings.Builder
+	lastHyphen := false
+	for _, r := range strings.ToLower(value) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			builder.WriteRune(r)
+			lastHyphen = false
+		case !lastHyphen && builder.Len() > 0:
+			builder.WriteByte('-')
+			lastHyphen = true
+		}
+	}
+	return strings.Trim(builder.String(), "-")
+}
+
+func nativeFlashcardDraftEscapeSnippetContent(content string) string {
+	lines := strings.Split(content, "\n")
+	for idx, line := range lines {
+		if isNativeFlashcardSectionHeader(strings.TrimSpace(line)) {
+			lines[idx] = `\` + line
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func nativeFlashcardDraftCodeFence(language string, content string) string {
+	fenceWidth := 3
+	run := 0
+	for _, r := range content {
+		if r == '`' {
+			run++
+			if run >= fenceWidth {
+				fenceWidth = run + 1
+			}
+			continue
+		}
+		run = 0
+	}
+	fence := strings.Repeat("`", fenceWidth)
+	if language = strings.TrimSpace(language); language != "" {
+		return fence + language + "\n" + content + "\n" + fence
+	}
+	return fence + "\n" + content + "\n" + fence
+}
+
 func isNativeFlashcardDeckFile(file string) bool {
 	name := filepath.Base(file)
 	ext := strings.ToLower(filepath.Ext(name))
@@ -430,8 +562,7 @@ func parseNativeFlashcardSections(lines []string) (map[string]string, error) {
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		switch trimmed {
-		case "Prompt:", "Trace:", "Options:", "Answer:", "Correct:", "Explanation:", "Tags:":
+		if isNativeFlashcardSectionHeader(trimmed) {
 			store()
 			current = strings.TrimSuffix(trimmed, ":")
 			continue
@@ -446,6 +577,15 @@ func parseNativeFlashcardSections(lines []string) (map[string]string, error) {
 	}
 	store()
 	return sections, nil
+}
+
+func isNativeFlashcardSectionHeader(line string) bool {
+	switch line {
+	case "Prompt:", "Trace:", "Options:", "Answer:", "Correct:", "Explanation:", "Tags:":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateNativeFlashcardDeck(deck nativeFlashcardDeck) error {

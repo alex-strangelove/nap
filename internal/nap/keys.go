@@ -11,6 +11,7 @@ type KeyMap struct {
 	ToggleHelp        key.Binding
 	NewSnippet        key.Binding
 	CreateFlashcards  key.Binding
+	DraftFlashcard    key.Binding
 	ReviewFlashcards  key.Binding
 	ResetFlashcards   key.Binding
 	NewFolder         key.Binding
@@ -46,6 +47,7 @@ var DefaultKeyMap = KeyMap{
 	ToggleHelp:       key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 	NewSnippet:       key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new snippet")),
 	CreateFlashcards: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "new cards"), key.WithDisabled()),
+	DraftFlashcard:   key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "draft card"), key.WithDisabled()),
 	ReviewFlashcards: key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "review cards"), key.WithDisabled()),
 	ResetFlashcards:  key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "reset cards"), key.WithDisabled()),
 	NewFolder:        key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "new folder")),
@@ -87,7 +89,7 @@ func (k KeyMap) ShortHelp() []key.Binding {
 	}
 
 	if k.flashcardsEnabled {
-		for _, binding := range []key.Binding{k.CreateFlashcards, k.ReviewFlashcards, k.ResetFlashcards} {
+		for _, binding := range []key.Binding{k.CreateFlashcards, k.DraftFlashcard, k.ReviewFlashcards, k.ResetFlashcards} {
 			if binding.Enabled() {
 				shortHelp = append(shortHelp, shortHelpBinding(binding))
 			}
@@ -108,7 +110,7 @@ func shortHelpBinding(binding key.Binding) key.Binding {
 func (k KeyMap) FullHelp() [][]key.Binding {
 	firstRow := []key.Binding{k.NewSnippet, k.NewFolder, k.NewRootFolder, k.EditSnippet, k.PasteSnippet}
 	if k.flashcardsEnabled {
-		firstRow = append(firstRow, k.CreateFlashcards, k.ReviewFlashcards, k.ResetFlashcards)
+		firstRow = append(firstRow, k.CreateFlashcards, k.DraftFlashcard, k.ReviewFlashcards, k.ResetFlashcards)
 	}
 
 	return [][]key.Binding{

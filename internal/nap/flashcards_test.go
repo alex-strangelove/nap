@@ -72,6 +72,39 @@ func TestCreateFlashcardDeck(t *testing.T) {
 	}
 }
 
+func TestCreateFlashcardDeckKeepsSelectedSnippetForDrafting(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	source := Snippet{
+		Name:     "boot-walk",
+		Folder:   defaultSnippetFolder,
+		File:     "boot-walk.go",
+		Language: "go",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create snippet folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, source.File), []byte("fmt.Println(\"boot\")\n"), 0o644); err != nil {
+		t.Fatalf("could not write source snippet: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{source}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{source})
+	m.Folders.Select(0)
+	m.selectSnippetInFolder(Folder(defaultSnippetFolder), source)
+	m.updateKeyMap()
+
+	got := runModelCmd(m, m.createFlashcardDeck())
+	if selected := got.selectedSnippet(); selected.Path() != source.Path() {
+		t.Fatalf("expected selected snippet to stay on source after deck creation, got %#v", selected)
+	}
+	if !got.keys.DraftFlashcard.Enabled() {
+		t.Fatal("expected draft flashcard key to stay enabled after deck creation")
+	}
+}
+
 func TestCreateFlashcardDeckClearsStaleNativeState(t *testing.T) {
 	tmp := tmpHome(t)
 	m := newTestModel()
@@ -110,13 +143,174 @@ func TestCreateFlashcardDeckClearsStaleNativeState(t *testing.T) {
 	}
 }
 
+func TestNativeFlashcardDraftBlockCreatesValidBasicCard(t *testing.T) {
+	source := Snippet{
+		Name:     "boot-walk",
+		Folder:   defaultSnippetFolder,
+		File:     "boot-walk.go",
+		Language: "go",
+	}
+
+	block := nativeFlashcardDraftBlock(source, defaultNativeFlashcardDeckContent(), "Answer:\nfmt.Println(\"boot\")\n")
+	card, err := parseNativeFlashcardBlock(block)
+	if err != nil {
+		t.Fatalf("expected draft block to parse, got %v", err)
+	}
+	if card.ID != "draft-boot-walk" {
+		t.Fatalf("unexpected draft id: got %q", card.ID)
+	}
+	if card.Type != nativeFlashcardTypeBasic {
+		t.Fatalf("expected basic draft card, got %q", card.Type)
+	}
+	if !strings.Contains(card.Answer, "TODO: replace this with the key fact") {
+		t.Fatalf("expected draft answer placeholder, got %q", card.Answer)
+	}
+	if !strings.Contains(card.Answer, `\Answer:`) {
+		t.Fatalf("expected section-like snippet line to be escaped, got %q", card.Answer)
+	}
+	if !strings.Contains(card.Explanation, source.Path()) {
+		t.Fatalf("expected source path in explanation, got %q", card.Explanation)
+	}
+}
+
+func TestNativeFlashcardDraftBlockUsesUniqueIDSuffix(t *testing.T) {
+	source := Snippet{
+		Name:     "boot-walk",
+		Folder:   defaultSnippetFolder,
+		File:     "boot-walk.go",
+		Language: "go",
+	}
+
+	existing := defaultNativeFlashcardDeckContent() + `
+
++++
+
+<!-- id: draft-boot-walk -->
+<!-- type: basic -->
+
+Prompt:
+Existing draft.
+
+Answer:
+Keep me.
+`
+	block := nativeFlashcardDraftBlock(source, existing, "fmt.Println(\"boot\")\n")
+	if !strings.Contains(block, "<!-- id: draft-boot-walk-2 -->") {
+		t.Fatalf("expected duplicate draft id to get numeric suffix, got %q", block)
+	}
+}
+
+func TestDraftFlashcardFromSnippetAppendsDraftAndSelectsDeck(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+
+	source := Snippet{
+		Name:     "boot-walk",
+		Folder:   defaultSnippetFolder,
+		File:     "boot-walk.go",
+		Language: "go",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create snippet folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, source.File), []byte("fmt.Println(\"boot\")\n"), 0o644); err != nil {
+		t.Fatalf("could not write source snippet: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{source}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{source})
+	m.Folders.Select(0)
+	m.selectSnippetInFolder(Folder(defaultSnippetFolder), source)
+	m.updateKeyMap()
+
+	got := runModelCmd(m, m.draftFlashcardFromSnippet())
+	selected := got.selectedSnippet()
+	if selected.File != nativeFlashcardDeckStem+".md" {
+		t.Fatalf("expected deck to be selected after drafting, got %#v", selected)
+	}
+
+	deckPath := filepath.Join(tmp, defaultSnippetFolder, nativeFlashcardDeckStem+".md")
+	deck, err := readNativeFlashcardDeck(deckPath)
+	if err != nil {
+		t.Fatalf("expected appended deck to stay valid, got %v", err)
+	}
+	if len(deck.Cards) != 7 {
+		t.Fatalf("expected default template plus one draft card, got %d", len(deck.Cards))
+	}
+	draft := deck.Cards[len(deck.Cards)-1]
+	if draft.ID != "draft-boot-walk" {
+		t.Fatalf("unexpected appended draft id: got %q", draft.ID)
+	}
+	if !strings.Contains(draft.Answer, "fmt.Println(\"boot\")") {
+		t.Fatalf("expected appended draft to include snippet content, got %q", draft.Answer)
+	}
+}
+
+func TestCreateThenDraftFlashcardFromSameSnippet(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+
+	source := Snippet{
+		Name:     "boot-walk",
+		Folder:   defaultSnippetFolder,
+		File:     "boot-walk.go",
+		Language: "go",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create snippet folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, source.File), []byte("fmt.Println(\"boot\")\n"), 0o644); err != nil {
+		t.Fatalf("could not write source snippet: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{source}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{source})
+	m.Folders.Select(0)
+	m.selectSnippetInFolder(Folder(defaultSnippetFolder), source)
+	m.updateKeyMap()
+
+	got := runModelCmd(m, m.createFlashcardDeck())
+	got = runModelCmd(got, got.draftFlashcardFromSnippet())
+
+	selected := got.selectedSnippet()
+	if selected.File != nativeFlashcardDeckStem+".md" {
+		t.Fatalf("expected deck to be selected after drafting, got %#v", selected)
+	}
+	deckPath := filepath.Join(tmp, defaultSnippetFolder, nativeFlashcardDeckStem+".md")
+	deck, err := readNativeFlashcardDeck(deckPath)
+	if err != nil {
+		t.Fatalf("expected created-and-drafted deck to stay valid, got %v", err)
+	}
+	if got := len(deck.Cards); got != 7 {
+		t.Fatalf("expected default template plus one drafted card, got %d", got)
+	}
+	if deck.Cards[len(deck.Cards)-1].ID != "draft-boot-walk" {
+		t.Fatalf("unexpected drafted card id after create+draft: got %q", deck.Cards[len(deck.Cards)-1].ID)
+	}
+}
+
+func TestVisibleLineOffsetForTextIgnoresANSI(t *testing.T) {
+	rendered := "top\n\x1b[38;2;1;2;3mDrafted from snippet notes/boot-walk.go. Narrow this into a smaller recall target before reviewing.\x1b[0m\nbottom"
+	offset, ok := visibleLineOffsetForText(rendered, "notes/boot-walk.go")
+	if !ok {
+		t.Fatal("expected to find visible line containing target text")
+	}
+	if offset != 1 {
+		t.Fatalf("unexpected offset: got %d want 1", offset)
+	}
+}
+
 func TestParseNativeFlashcardDeckV2(t *testing.T) {
 	deck, err := parseNativeFlashcardDeck([]byte(defaultNativeFlashcardDeckContent()))
 	if err != nil {
 		t.Fatalf("expected v2 deck to parse, got %v", err)
 	}
-	if len(deck.Cards) != 4 {
-		t.Fatalf("expected four cards, got %d", len(deck.Cards))
+	if len(deck.Cards) != 6 {
+		t.Fatalf("expected six cards, got %d", len(deck.Cards))
 	}
 	if deck.Cards[0].Type != nativeFlashcardTypeBasic {
 		t.Fatalf("expected first card to stay basic, got %q", deck.Cards[0].Type)
@@ -127,16 +321,28 @@ func TestParseNativeFlashcardDeckV2(t *testing.T) {
 	if len(deck.Cards[1].Options) != 4 {
 		t.Fatalf("expected code-cloze options, got %#v", deck.Cards[1].Options)
 	}
-	if deck.Cards[2].Type != nativeFlashcardTypeOrderedRecall {
-		t.Fatalf("expected third card to be ordered-recall, got %q", deck.Cards[2].Type)
+	if deck.Cards[2].Type != nativeFlashcardTypeSingleChoice {
+		t.Fatalf("expected third card to be single-choice, got %q", deck.Cards[2].Type)
 	}
-	if len(deck.Cards[2].CorrectOptions) != len(deck.Cards[2].Options) {
-		t.Fatalf("expected ordered-recall options to define the correct order, got %#v", deck.Cards[2].CorrectOptions)
+	if len(deck.Cards[2].CorrectOptions) != 1 {
+		t.Fatalf("expected single-choice card to have one correct option, got %#v", deck.Cards[2].CorrectOptions)
 	}
-	if deck.Cards[3].Type != nativeFlashcardTypeTrace {
-		t.Fatalf("expected fourth card to be trace, got %q", deck.Cards[3].Type)
+	if deck.Cards[3].Type != nativeFlashcardTypeMultiChoice {
+		t.Fatalf("expected fourth card to be multi-choice, got %q", deck.Cards[3].Type)
 	}
-	if deck.Cards[3].Trace == "" {
+	if len(deck.Cards[3].CorrectOptions) != 2 {
+		t.Fatalf("expected multi-choice card to keep all correct options, got %#v", deck.Cards[3].CorrectOptions)
+	}
+	if deck.Cards[4].Type != nativeFlashcardTypeOrderedRecall {
+		t.Fatalf("expected fifth card to be ordered-recall, got %q", deck.Cards[4].Type)
+	}
+	if len(deck.Cards[4].CorrectOptions) != len(deck.Cards[4].Options) {
+		t.Fatalf("expected ordered-recall options to define the correct order, got %#v", deck.Cards[4].CorrectOptions)
+	}
+	if deck.Cards[5].Type != nativeFlashcardTypeTrace {
+		t.Fatalf("expected sixth card to be trace, got %q", deck.Cards[5].Type)
+	}
+	if deck.Cards[5].Trace == "" {
 		t.Fatal("expected trace card to keep trace content")
 	}
 }

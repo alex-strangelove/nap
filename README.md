@@ -36,6 +36,7 @@ nap
 | :--- | :--- |
 | Create a new snippet | <kbd>n</kbd> |
 | Create `00-nap-cards.md` in the selected folder | <kbd>f</kbd> |
+| Append a draft card from the selected snippet | <kbd>g</kbd> |
 | Review the selected folder's flashcards | <kbd>F</kbd> |
 | Edit selected snippet (in `$EDITOR`) | <kbd>e</kbd> |
 | Copy selected snippet to clipboard | <kbd>c</kbd> |
@@ -201,6 +202,7 @@ export NAP_WHITE="#FFFFFF"
 Flashcards are enabled by default.
 
 - Use <kbd>f</kbd> to scaffold a native Nap deck at `00-nap-cards.md`.
+- Use <kbd>g</kbd> on a normal snippet to append a draft basic card to the folder's deck and jump to `00-nap-cards.md` for editing.
 - Use <kbd>F</kbd> to review the selected folder's flashcards.
 - Native `00-nap-cards.md` decks are reviewed inside Nap and store progress in a hidden sidecar state file next to the deck.
 - Use <kbd>z</kbd> to reset Napcards progress for the selected folder.
