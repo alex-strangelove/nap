@@ -35,8 +35,8 @@ nap
 | Action | Key |
 | :--- | :--- |
 | Create a new snippet | <kbd>n</kbd> |
-| Create `00-cards.txt` in the selected folder | <kbd>f</kbd> |
-| Review the selected folder's flashcards (creates `00-cards.txt` if missing) | <kbd>F</kbd> |
+| Create `00-nap-cards.md` in the selected folder | <kbd>f</kbd> |
+| Review the selected folder's flashcards | <kbd>F</kbd> |
 | Edit selected snippet (in `$EDITOR`) | <kbd>e</kbd> |
 | Copy selected snippet to clipboard | <kbd>c</kbd> |
 | Paste clipboard to selected snippet | <kbd>p</kbd> |
@@ -158,7 +158,6 @@ Nap is customized through a configuration file located at `NAP_CONFIG` (`$XDG_CO
 home: ~/.nap
 default_language: go
 flashcards_enabled: true
-flashcards_command: hascard
 markdown_style: auto
 theme: nord
 
@@ -185,7 +184,6 @@ export NAP_CONFIG="~/.nap/config.yaml"
 export NAP_HOME="~/.nap"
 export NAP_DEFAULT_LANGUAGE="go"
 export NAP_FLASHCARDS_ENABLED="false"
-export NAP_FLASHCARDS_COMMAND="hascard"
 export NAP_MARKDOWN_STYLE="tokyo-night"
 export NAP_THEME="nord"
 
@@ -200,7 +198,14 @@ export NAP_GRAY="240"
 export NAP_WHITE="#FFFFFF"
 ```
 
-Flashcards are enabled by default. `nap` treats a single `00-*.md` or `00-*.txt` file in a folder as that folder's flashcard deck. Use <kbd>f</kbd> to scaffold `00-cards.txt` from the bundled hascard template and <kbd>F</kbd> to review that folder's existing cards. Set `flashcards_enabled: false` or `NAP_FLASHCARDS_ENABLED=false` to turn the integration off.
+Flashcards are enabled by default.
+
+- Use <kbd>f</kbd> to scaffold a native Nap deck at `00-nap-cards.md`.
+- Use <kbd>F</kbd> to review the selected folder's flashcards.
+- Native `00-nap-cards.md` decks are reviewed inside Nap and store progress in a hidden sidecar state file next to the deck.
+- Use <kbd>z</kbd> to reset Napcards progress for the selected folder.
+
+Set `flashcards_enabled: false` or `NAP_FLASHCARDS_ENABLED=false` to turn the integration off. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the shipped foundation and planned next phases.
 
 Markdown previews are rendered internally with Glamour. When `markdown_style` is `auto`, Nap derives `light` or `dark` from the configured Chroma `theme` so Markdown preview stays aligned with the rest of the app. Set `markdown_style` or `NAP_MARKDOWN_STYLE` to a built-in Glamour style such as `auto`, `dark`, `light`, `dracula`, or `tokyo-night` to override that behavior.
 

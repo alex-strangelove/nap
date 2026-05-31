@@ -88,6 +88,7 @@ func DefaultStyles(config Config) Styles {
 	blue := lipgloss.Color(config.PrimaryColorSubdued)
 	red := lipgloss.Color(config.RedColor)
 	brightRed := lipgloss.Color(config.BrightRedColor)
+	lightDeleteRed := lipgloss.Color("#F2B8B5")
 
 	return Styles{
 		Snippets: SnippetsStyle{
@@ -101,7 +102,7 @@ func DefaultStyles(config Config) Styles {
 				CopiedTitleBar:     lipgloss.NewStyle().Background(green).Width(35-2).Margin(0, 1, 1, 1).Padding(0, 1).Foreground(white),
 				CopiedTitle:        lipgloss.NewStyle().Foreground(brightGreen),
 				CopiedSubtitle:     lipgloss.NewStyle().Foreground(green),
-				DeletedTitleBar:    lipgloss.NewStyle().Background(red).Width(35-2).Margin(0, 1, 1, 1).Padding(0, 1).Foreground(white),
+				DeletedTitleBar:    lipgloss.NewStyle().Background(lightDeleteRed).Width(35-2).Margin(0, 1, 1, 1).Padding(0, 1).Foreground(white),
 				DeletedTitle:       lipgloss.NewStyle().Foreground(brightRed),
 				DeletedSubtitle:    lipgloss.NewStyle().Foreground(red),
 			},
@@ -115,7 +116,7 @@ func DefaultStyles(config Config) Styles {
 				CopiedTitleBar:     lipgloss.NewStyle().Background(green).Width(35-2).Margin(0, 1, 1, 1).Padding(0, 1),
 				CopiedTitle:        lipgloss.NewStyle().Foreground(brightGreen),
 				CopiedSubtitle:     lipgloss.NewStyle().Foreground(green),
-				DeletedTitleBar:    lipgloss.NewStyle().Background(red).Width(35-2).Margin(0, 1, 1, 1).Padding(0, 1),
+				DeletedTitleBar:    lipgloss.NewStyle().Background(lightDeleteRed).Width(35-2).Margin(0, 1, 1, 1).Padding(0, 1),
 				DeletedTitle:       lipgloss.NewStyle().Foreground(brightRed),
 				DeletedSubtitle:    lipgloss.NewStyle().Foreground(red),
 			},

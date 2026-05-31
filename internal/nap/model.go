@@ -51,6 +51,7 @@ const (
 	editingState
 	editingTagsState
 	searchingState
+	reviewingFlashcardsState
 )
 
 type input int
@@ -113,6 +114,7 @@ type Model struct {
 	searchRestorePane pane
 	searchMode        searchMode
 	searchMatchIndex  int
+	flashcardSession  *nativeFlashcardReviewSession
 }
 
 func (m *Model) replaceFlashcardDeck(folder Folder, current, replacement Snippet) {
@@ -397,6 +399,11 @@ func renderContent(config Config, snippet Snippet, width int, key contentCacheKe
 //
 // This is useful after a Paste or Edit.
 func (m *Model) updateContent() tea.Cmd {
+	if m.state == reviewingFlashcardsState {
+		return func() tea.Msg {
+			return contentRenderedMsg{}
+		}
+	}
 	if m.shouldShowFolderDashboard() {
 		return func() tea.Msg {
 			return contentRenderedMsg{showNoContentHint: true}
@@ -473,22 +480,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateKeyMap()
 		if m.state == searchingState {
 			return m, tea.Batch(setItemsCmd, m.refreshSearchResults())
-		}
-		return m, tea.Batch(setItemsCmd, m.updateContent())
-	case flashcardsFinishedMsg:
-		if msg.err != nil {
-			m.displayError(flashcardsError(m.config, msg.err))
-			return m, nil
-		}
-		setItemsCmd := m.refreshFromDisk("", msg.folder)
-		m.updateKeyMap()
-		if msg.preview {
-			m.pane = folderPane
-			return m, tea.Batch(
-				m.updateActivePane(changeStateMsg{newState: m.state}),
-				setItemsCmd,
-				m.updateContent(),
-			)
 		}
 		return m, tea.Batch(setItemsCmd, m.updateContent())
 	case changeStateMsg:
@@ -604,6 +595,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.List().FilterState() == list.Filtering {
 			break
+		}
+
+		if m.state == reviewingFlashcardsState {
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				m.saveState()
+				m.state = quittingState
+				return m, tea.Quit
+			case key.Matches(msg, m.keys.Cancel):
+				return m, m.stopNativeFlashcardReview()
+			case msg.String() == " " || msg.String() == "enter":
+				if m.flashcardSession != nil {
+					m.flashcardSession.Revealed = true
+				}
+				return m, m.updateContent()
+			case msg.String() == "1":
+				return m, m.gradeNativeFlashcard(flashcardGradeAgain)
+			case msg.String() == "2":
+				return m, m.gradeNativeFlashcard(flashcardGradeHard)
+			case msg.String() == "3":
+				return m, m.gradeNativeFlashcard(flashcardGradeGood)
+			case msg.String() == "4":
+				return m, m.gradeNativeFlashcard(flashcardGradeEasy)
+			}
+			return m, nil
 		}
 
 		if m.state == deletingState {
@@ -738,6 +754,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.nextPane()
 		case key.Matches(msg, m.keys.PreviousPane):
 			if cmd := m.openFlashcardsOnPaneLeft(); cmd != nil {
+				if m.state == reviewingFlashcardsState {
+					return m, cmd
+				}
 				m.previousPane()
 				m.updateKeyMap()
 				return m, tea.Batch(m.updateActivePane(msg), cmd)
@@ -942,10 +961,10 @@ func (m *Model) noContentHints() []keyHint {
 			hints = append(hints, keyHint{m.keys.ReviewFlashcards, "review cards for this folder"})
 		}
 		if m.keys.CreateFlashcards.Enabled() {
-			hints = append(hints, keyHint{m.keys.CreateFlashcards, "create 00-cards from template"})
+			hints = append(hints, keyHint{m.keys.CreateFlashcards, "create 00-nap-cards from template"})
 		}
 		if m.keys.ResetFlashcards.Enabled() {
-			hints = append(hints, keyHint{m.keys.ResetFlashcards, "reset answered cards to 00-cards"})
+			hints = append(hints, keyHint{m.keys.ResetFlashcards, "reset napcards progress"})
 		}
 	}
 	return hints
@@ -956,13 +975,13 @@ func (m *Model) createHints() []keyHint {
 		{m.keys.NewSnippet, "create a new snippet."},
 	}
 	if m.keys.CreateFlashcards.Enabled() {
-		hints = append(hints, keyHint{m.keys.CreateFlashcards, "create 00-cards from template."})
+		hints = append(hints, keyHint{m.keys.CreateFlashcards, "create 00-nap-cards from template."})
 	}
 	if m.keys.ReviewFlashcards.Enabled() {
 		hints = append(hints, keyHint{m.keys.ReviewFlashcards, "review cards for this folder."})
 	}
 	if m.keys.ResetFlashcards.Enabled() {
-		hints = append(hints, keyHint{m.keys.ResetFlashcards, "reset answered cards to 00-cards."})
+		hints = append(hints, keyHint{m.keys.ResetFlashcards, "reset napcards progress."})
 	}
 	return hints
 }
@@ -1121,7 +1140,7 @@ func (m *Model) updateFolderTreeNavigation(msg tea.KeyMsg) (tea.Cmd, bool) {
 		if snippet, ok := selectedItem.(Snippet); ok {
 			if m.config.FlashcardsEnabled && isFlashcardDeck(snippet) {
 				m.selectSnippetInFolder(Folder(snippet.Folder), snippet)
-				return m.runFlashcards(snippet, false), true
+				return m.startFlashcardsReview(snippet, false), true
 			}
 			m.selectSnippetInFolder(Folder(snippet.Folder), snippet)
 			m.pane = contentPane
@@ -1173,6 +1192,10 @@ func (m *Model) updateFolderTreeNavigation(msg tea.KeyMsg) (tea.Cmd, bool) {
 // applyContentView updates the content viewport with the rendered content or
 // appropriate hints.
 func (m *Model) applyContentView(msg contentRenderedMsg) (tea.Model, tea.Cmd) {
+	if m.state == reviewingFlashcardsState {
+		m.displayNativeFlashcardReview()
+		return m, nil
+	}
 	if msg.showCreateHint {
 		m.displayKeyHint(m.createHints())
 		return m, nil
@@ -1295,6 +1318,7 @@ func (s flashcardSummary) remainingCount() int {
 
 func (m *Model) collectFolderFlashcardSummary(folder Folder) flashcardSummary {
 	summary := flashcardSummary{}
+	now := time.Now()
 	for listFolder, li := range m.Lists {
 		isRootFolder := listFolder == folder
 		isNestedFolder := strings.HasPrefix(string(listFolder), string(folder)+"/")
@@ -1305,6 +1329,31 @@ func (m *Model) collectFolderFlashcardSummary(folder Folder) flashcardSummary {
 		for _, item := range li.Items() {
 			snippet, ok := item.(Snippet)
 			if !ok || !isFlashcardDeck(snippet) {
+				continue
+			}
+
+			if isNativeFlashcardDeck(snippet) {
+				path, err := snippetStoragePath(m.config.Home, snippet)
+				if err != nil {
+					continue
+				}
+				parsed, err := readNativeFlashcardDeck(path)
+				if err != nil {
+					continue
+				}
+				state, err := readNativeFlashcardState(m.config.Home, snippet)
+				if err != nil {
+					continue
+				}
+				nativeSummary := nativeFlashcardSummary(parsed, state, now)
+				if isRootFolder {
+					summary.rootCount += nativeSummary.rootCount
+				} else {
+					summary.nestedCount += nativeSummary.rootCount
+				}
+				summary.pendingCount += nativeSummary.pendingCount
+				summary.positiveCount += nativeSummary.positiveCount
+				summary.negativeCount += nativeSummary.negativeCount
 				continue
 			}
 
@@ -1528,6 +1577,9 @@ func (m *Model) contentHeader() string {
 	renderTitleBar := func(style lipgloss.Style, content string) string {
 		return style.Width(maxWidth(m.previewWidth())).Render(content)
 	}
+	deleteTitleBarStyle := func() lipgloss.Style {
+		return m.ListStyle.DeletedTitleBar.Foreground(m.ContentStyle.TitleBar.GetForeground())
+	}
 
 	if m.state == editingState {
 		return renderTitleBar(m.ContentStyle.TitleBar, lipgloss.JoinHorizontal(lipgloss.Left,
@@ -1541,10 +1593,10 @@ func (m *Model) contentHeader() string {
 
 	if m.state == deletingState {
 		if snippet, ok := m.selectedFolderItem().(Snippet); ok {
-			return renderTitleBar(m.ContentStyle.TitleBar, fmt.Sprintf("Delete %s? (y/N)", snippet.Name))
+			return renderTitleBar(deleteTitleBarStyle(), fmt.Sprintf("Delete %s? (y/N)", snippet.Name))
 		}
 		if folder, ok := m.folderDeletionTarget(); ok {
-			return renderTitleBar(m.ContentStyle.TitleBar, fmt.Sprintf("Delete %s? (y/N)", folderLabel(folder)))
+			return renderTitleBar(deleteTitleBarStyle(), fmt.Sprintf("Delete %s? (y/N)", folderLabel(folder)))
 		}
 	}
 
@@ -1676,6 +1728,7 @@ func (m *Model) updateActivePane(msg tea.Msg) tea.Cmd {
 	m.Folders.SetDelegate(folderDelegate{
 		styles:     m.FoldersStyle,
 		compact:    compact,
+		home:       m.config.Home,
 		depths:     m.folderTree.depths,
 		expanded:   m.folderExpanded,
 		children:   m.folderTree.children,
@@ -1702,34 +1755,51 @@ func (m *Model) updateKeyMap() {
 	isFiltering := hasSelectedList && selectedList.FilterState() == list.Filtering
 	isEditing := m.state == editingState
 	isSearching := m.state == searchingState
+	isReviewing := m.state == reviewingFlashcardsState
 	decks := m.flashcardDecks(m.selectedFolder())
-	flashcardsReady := m.config.FlashcardsEnabled && !isFiltering && !isEditing && !isSearching
+	flashcardsReady := m.config.FlashcardsEnabled && !isFiltering && !isEditing && !isSearching && !isReviewing
 	selection := classifyFlashcardDecks(decks)
 
 	m.keys.flashcardsEnabled = m.config.FlashcardsEnabled
 	_, snippetSelected := m.selectedFolderItem().(Snippet)
 	_, folderSelected := m.selectedFolderItem().(Folder)
-	m.keys.DeleteSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing && !isSearching)
-	m.keys.DeleteFolder.SetEnabled(m.pane == folderPane && folderSelected && hasFolderItems && !isEditing && !isSearching)
-	m.keys.CopySnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing && !isSearching)
-	m.keys.PasteSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing && !isSearching)
-	m.keys.EditSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing && !isSearching)
-	m.keys.NewSnippet.SetEnabled(!isFiltering && !isEditing && !isSearching)
-	m.keys.NewFolder.SetEnabled(m.pane == folderPane && !isEditing && !isSearching)
-	m.keys.NewRootFolder.SetEnabled(m.pane == folderPane && !isEditing && !isSearching)
-	m.keys.ChangeFolder.SetEnabled(m.pane == folderPane && !isSearching)
+	m.keys.DeleteSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing && !isSearching && !isReviewing)
+	m.keys.DeleteFolder.SetEnabled(m.pane == folderPane && folderSelected && hasFolderItems && !isEditing && !isSearching && !isReviewing)
+	m.keys.CopySnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing && !isSearching && !isReviewing)
+	m.keys.PasteSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing && !isSearching && !isReviewing)
+	m.keys.EditSnippet.SetEnabled(snippetSelected && !isFiltering && !isEditing && !isSearching && !isReviewing)
+	m.keys.NewSnippet.SetEnabled(!isFiltering && !isEditing && !isSearching && !isReviewing)
+	m.keys.NewFolder.SetEnabled(m.pane == folderPane && !isEditing && !isSearching && !isReviewing)
+	m.keys.NewRootFolder.SetEnabled(m.pane == folderPane && !isEditing && !isSearching && !isReviewing)
+	m.keys.ChangeFolder.SetEnabled(m.pane == folderPane && !isSearching && !isReviewing)
 	m.keys.CreateFlashcards.SetEnabled(flashcardsReady && len(decks) == 0)
 	_, reviewDeckErr := selection.reviewDeck()
 	m.keys.ReviewFlashcards.SetEnabled(flashcardsReady && reviewDeckErr == nil)
-	m.keys.ResetFlashcards.SetEnabled(flashcardsReady && selection.canReset())
-	m.keys.SearchPreview.SetEnabled(!isEditing && !isSearching)
-	m.keys.SearchMetadata.SetEnabled(!isEditing && !isSearching)
-	m.keys.SearchContents.SetEnabled(!isEditing && !isSearching)
+	m.keys.ResetFlashcards.SetEnabled(flashcardsReady && m.canResetFlashcards(selection))
+	m.keys.SearchPreview.SetEnabled(!isEditing && !isSearching && !isReviewing)
+	m.keys.SearchMetadata.SetEnabled(!isEditing && !isSearching && !isReviewing)
+	m.keys.SearchContents.SetEnabled(!isEditing && !isSearching && !isReviewing)
 	m.keys.SearchNext.SetEnabled(isSearching)
 	m.keys.SearchPrevious.SetEnabled(isSearching)
 	m.keys.SearchEdit.SetEnabled(isSearching)
 	m.keys.SearchFocusLeft.SetEnabled(isSearching && m.searchMode == contentSearchMode)
 	m.keys.SearchFocusRight.SetEnabled(isSearching && m.searchMode == contentSearchMode)
+}
+
+func (m *Model) canResetFlashcards(selection flashcardDeckSelection) bool {
+	if selection.canReset() {
+		return true
+	}
+	for _, deck := range selection.pending {
+		if !isNativeFlashcardDeck(deck) {
+			continue
+		}
+		hasProgress, err := hasNativeFlashcardProgress(m.config.Home, deck)
+		if err == nil && hasProgress {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) flashcardDecks(folder Folder) []Snippet {
@@ -2045,10 +2115,10 @@ func (m *Model) ensureFlashcardDeck() (Snippet, error) {
 	}
 
 	deck := Snippet{
-		Name:     defaultFlashcardDeckStem,
+		Name:     nativeFlashcardDeckStem,
 		Date:     time.Now(),
-		File:     defaultFlashcardDeckStem + defaultFlashcardExtension,
-		Language: defaultFlashcardLanguage,
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
 		Tags:     []string{},
 		Folder:   string(folder),
 	}
@@ -2066,7 +2136,7 @@ func (m *Model) ensureFlashcardDeck() (Snippet, error) {
 		return Snippet{}, err
 	}
 
-	if err := os.WriteFile(path, []byte(defaultFlashcardDeckContent()), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
 		return Snippet{}, err
 	}
 
@@ -2112,22 +2182,22 @@ func (m *Model) reviewFlashcards() tea.Cmd {
 		return nil
 	}
 
-	return m.runFlashcards(deck, false)
+	return m.startFlashcardsReview(deck, false)
 }
 
 func (m *Model) resetFlashcards() tea.Cmd {
 	return func() tea.Msg {
 		folder := m.selectedFolder()
-		deck, answered, err := resetFlashcardDecksOnDisk(m.config.Home, m.flashcardDecks(folder))
-		if err != nil {
-			if errors.Is(err, errFlashcardDeckMissing) {
-				m.displayError("Flashcards are already reset.")
-			} else {
-				m.displayError(err.Error())
-			}
+		decks := m.flashcardDecks(folder)
+		resetNative, nativeErr := resetNativeFlashcardProgressOnDisk(m.config.Home, decks)
+		if nativeErr != nil {
+			m.displayError(nativeErr.Error())
 			return m.updateFoldersForSelection(folder, false)()
 		}
-		m.resetFlashcardDecks(folder, deck, answered)
+		if len(resetNative) == 0 {
+			m.displayError("Flashcards are already reset.")
+			return m.updateFoldersForSelection(folder, false)()
+		}
 		m.invalidateSearchIndex()
 		m.state = navigatingState
 		m.updateKeyMap()
@@ -2146,30 +2216,11 @@ func (m *Model) openFlashcardsOnPaneLeft() tea.Cmd {
 	if !isFlashcardDeck(snippet) || snippet.Path() == "" {
 		return nil
 	}
-	return m.runFlashcards(snippet, true)
+	return m.startFlashcardsReview(snippet, true)
 }
 
-func (m *Model) runFlashcards(snippet Snippet, preview bool) tea.Cmd {
-	path, err := snippetStoragePath(m.config.Home, snippet)
-	if err != nil {
-		m.displayError(err.Error())
-		return nil
-	}
-
-	cmd, err := flashcardsCmd(m.config, path)
-	if err != nil {
-		m.displayError(flashcardsError(m.config, err))
-		return nil
-	}
-
-	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return flashcardsFinishedMsg{
-			err:         err,
-			folder:      Folder(snippet.Folder),
-			snippetPath: snippet.Path(),
-			preview:     preview,
-		}
-	})
+func (m *Model) startFlashcardsReview(snippet Snippet, preview bool) tea.Cmd {
+	return m.startNativeFlashcardReview(snippet)
 }
 
 func (m *Model) createNewFolderAt(parent Folder) tea.Cmd {

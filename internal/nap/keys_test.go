@@ -6,12 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestPaneNavigationUsesHLKeys(t *testing.T) {
@@ -137,34 +139,57 @@ func TestReviewFlashcardsDisabledWithoutDeck(t *testing.T) {
 	}
 }
 
-func TestMixedFlashcardDecksEnableReviewAndReset(t *testing.T) {
+func TestNativeFlashcardDeckWithProgressEnablesReset(t *testing.T) {
+	tmp := tmpHome(t)
 	m := newTestModel()
+	m.config.Home = tmp
 	m.config.FlashcardsEnabled = true
 	folder := Folder(defaultSnippetFolder)
-	m.Lists[folder] = newList([]list.Item{
-		Snippet{Name: "00-cards", Folder: defaultSnippetFolder, File: "00-cards.txt", Language: "txt"},
-		Snippet{Name: "00-cards+", Folder: defaultSnippetFolder, File: "00-cards+.txt", Language: "txt"},
-	}, 20, m.ListStyle)
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write native deck: %v", err)
+	}
+	if err := writeNativeFlashcardState(tmp, deck, nativeFlashcardState{
+		Cards: map[string]nativeFlashcardProgress{
+			"linux-paging-4level-walk": {Reviews: 1, LastGrade: flashcardGradeGood, DueAt: time.Now().Add(24 * time.Hour)},
+		},
+	}); err != nil {
+		t.Fatalf("could not write native flashcard state: %v", err)
+	}
+	m.Lists[folder] = newList([]list.Item{deck}, 20, m.ListStyle)
 	m.Folders.SetItems([]list.Item{folder})
 	m.Folders.Select(0)
 	m.updateKeyMap()
 
-	if !m.keys.ReviewFlashcards.Enabled() {
-		t.Fatal("review flashcards key should stay enabled when pending and answered decks coexist")
-	}
 	if !m.keys.ResetFlashcards.Enabled() {
-		t.Fatal("reset flashcards key should be enabled when answered decks exist")
+		t.Fatal("reset flashcards key should be enabled when a native deck has tracked progress")
 	}
 }
 
 func TestShortHelpShowsResetForMixedFlashcardDecks(t *testing.T) {
+	tmp := tmpHome(t)
 	m := newTestModel()
+	m.config.Home = tmp
 	m.config.FlashcardsEnabled = true
 	folder := Folder(defaultSnippetFolder)
-	m.Lists[folder] = newList([]list.Item{
-		Snippet{Name: "00-cards", Folder: defaultSnippetFolder, File: "00-cards.txt", Language: "txt"},
-		Snippet{Name: "00-cards+", Folder: defaultSnippetFolder, File: "00-cards+.txt", Language: "txt"},
-	}, 20, m.ListStyle)
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write native deck: %v", err)
+	}
+	if err := writeNativeFlashcardState(tmp, deck, nativeFlashcardState{
+		Cards: map[string]nativeFlashcardProgress{
+			"linux-paging-4level-walk": {Reviews: 1, LastGrade: flashcardGradeGood, DueAt: time.Now().Add(24 * time.Hour)},
+		},
+	}); err != nil {
+		t.Fatalf("could not write native flashcard state: %v", err)
+	}
+	m.Lists[folder] = newList([]list.Item{deck}, 20, m.ListStyle)
 	m.Folders.SetItems([]list.Item{folder})
 	m.Folders.Select(0)
 	m.updateKeyMap()
@@ -968,17 +993,17 @@ func TestFolderPaneLowercaseFCreatesFlashcardDeck(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected flashcard deck snippet, got %T", items[0])
 	}
-	if deck.File != "00-cards.txt" {
-		t.Fatalf("flashcard deck file mismatch: got %q want %q", deck.File, "00-cards.txt")
+	if deck.File != "00-nap-cards.md" {
+		t.Fatalf("flashcard deck file mismatch: got %q want %q", deck.File, "00-nap-cards.md")
 	}
 	selected, ok := got.selectedFolderItem().(Snippet)
-	if !ok || selected.File != "00-cards.txt" {
+	if !ok || selected.File != "00-nap-cards.md" {
 		t.Fatalf("expected created flashcard deck to be selected, got %T %v", got.selectedFolderItem(), got.selectedFolderItem())
 	}
 	if !got.folderExpanded[Folder("work")] {
 		t.Fatal("expected folder to expand after creating a visible flashcard deck")
 	}
-	if _, err := os.Stat(filepath.Join(tmp, "work", "00-cards.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(tmp, "work", "00-nap-cards.md")); err != nil {
 		t.Fatalf("flashcard deck was not created: %v", err)
 	}
 }
@@ -1005,7 +1030,7 @@ func TestFolderPaneUppercaseFIgnoresMissingFlashcardDeck(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("review key should not run without an existing deck")
 	}
-	if _, err := os.Stat(filepath.Join(tmp, "work", "00-cards.txt")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tmp, "work", nativeFlashcardDeckStem+".md")); !os.IsNotExist(err) {
 		t.Fatalf("flashcard deck should not be created by review key, got err=%v", err)
 	}
 }
@@ -1307,6 +1332,37 @@ func TestContentHeaderRendersSingleLineTitleBar(t *testing.T) {
 	}
 }
 
+func TestDeletingContentHeaderUsesHighlightedTitleBar(t *testing.T) {
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.state = deletingState
+	folder, ok := m.selectedFolderItem().(Folder)
+	if !ok {
+		t.Fatalf("expected selected folder item to be a folder, got %#v", m.selectedFolderItem())
+	}
+
+	expected := m.ListStyle.DeletedTitleBar.
+		Foreground(m.ContentStyle.TitleBar.GetForeground()).
+		Width(maxWidth(m.previewWidth())).
+		Render("Delete " + folderLabel(folder) + "? (y/N)")
+
+	if got := m.contentHeader(); got != expected {
+		t.Fatalf("expected highlighted delete header, got %q want %q", got, expected)
+	}
+}
+
+func TestDeletedTitleBarUsesLightRedBackground(t *testing.T) {
+	styles := DefaultStyles(newConfig())
+	want := lipgloss.Color("#F2B8B5")
+
+	if got := styles.Snippets.Focused.DeletedTitleBar.GetBackground(); got != want {
+		t.Fatalf("expected focused delete title bar background %q, got %q", want, got)
+	}
+	if got := styles.Snippets.Blurred.DeletedTitleBar.GetBackground(); got != want {
+		t.Fatalf("expected blurred delete title bar background %q, got %q", want, got)
+	}
+}
+
 func TestFoldersHeaderIsRenderedOutsideListView(t *testing.T) {
 	m := newTestModel()
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
@@ -1381,15 +1437,25 @@ func TestEmptyFolderSelectionDisplaysDashboard(t *testing.T) {
 }
 
 func TestFolderDashboardShowsFlashcardReadyStatus(t *testing.T) {
+	tmp := tmpHome(t)
 	m := newTestModel()
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.config.Home = tmp
 	folder := Folder(defaultSnippetFolder)
-	m.Lists[folder].InsertItem(1, Snippet{
-		Name:     "00-cards",
+	deck := Snippet{
+		Name:     nativeFlashcardDeckStem,
 		Folder:   defaultSnippetFolder,
-		File:     "00-cards.txt",
-		Language: "txt",
-	})
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[folder].InsertItem(1, deck)
 	sortSnippetList(m.Lists[folder])
 	m.updateKeyMap()
 	m.Lists[folder].Select(-1)
@@ -1398,36 +1464,51 @@ func TestFolderDashboardShowsFlashcardReadyStatus(t *testing.T) {
 	if view := m.Code.View(); !strings.Contains(view, "flashcards  ready to review") {
 		t.Fatalf("expected ready flashcards status in dashboard, got %q", view)
 	}
-	if view := m.Code.View(); !strings.Contains(view, "cards       1 root, 0 nested") {
+	if view := m.Code.View(); !strings.Contains(view, "cards       2 root, 0 nested") {
 		t.Fatalf("expected flashcard count in dashboard, got %q", view)
 	}
-	if view := m.Code.View(); !strings.Contains(view, "results     0 correct, 0 incorrect, 1 pending") {
+	if view := m.Code.View(); !strings.Contains(view, "results     0 correct, 0 incorrect, 2 pending") {
 		t.Fatalf("expected flashcard result counts in dashboard, got %q", view)
 	}
-	if view := m.Code.View(); !strings.Contains(view, "remaining   1") {
+	if view := m.Code.View(); !strings.Contains(view, "remaining   2") {
 		t.Fatalf("expected remaining flashcard count in dashboard, got %q", view)
 	}
 }
 
 func TestFolderDashboardShowsResetFlashcardsHintForAnsweredDeck(t *testing.T) {
+	tmp := tmpHome(t)
 	m := newTestModel()
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.config.Home = tmp
 	m.config.FlashcardsEnabled = true
 	folder := Folder(defaultSnippetFolder)
-	m.Lists[folder] = newList([]list.Item{
-		Snippet{
-			Name:     "00-cards+",
-			Folder:   defaultSnippetFolder,
-			File:     "00-cards+.txt",
-			Language: "txt",
+	deck := Snippet{
+		Name:     nativeFlashcardDeckStem,
+		Folder:   defaultSnippetFolder,
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	if err := writeNativeFlashcardState(tmp, deck, nativeFlashcardState{
+		Cards: map[string]nativeFlashcardProgress{
+			"linux-paging-4level-walk": {Reviews: 1, LastGrade: flashcardGradeGood, DueAt: time.Now().Add(24 * time.Hour)},
 		},
-	}, 20, m.ListStyle)
+	}); err != nil {
+		t.Fatalf("could not write native flashcard state: %v", err)
+	}
+	m.Lists[folder] = newList([]list.Item{deck}, 20, m.ListStyle)
 	m.Folders.SetItems([]list.Item{folder})
 	m.Folders.Select(0)
 
 	m.displayFolderDashboard()
 	view := m.Code.View()
-	if !strings.Contains(view, "reset answered cards to 00-cards.") {
+	if !strings.Contains(view, "reset napcards progress.") {
 		t.Fatalf("expected reset hint in folder dashboard, got %q", view)
 	}
 	if !strings.Contains(view, "z") {
@@ -1439,53 +1520,39 @@ func TestFolderDashboardShowsResetFlashcardsHintForAnsweredDeck(t *testing.T) {
 	if !strings.Contains(view, "F • review cards for this folder.") {
 		t.Fatalf("expected review cards hint in folder dashboard, got %q", view)
 	}
-	if !strings.Contains(view, "z • reset answered cards to 00-cards.") {
+	if !strings.Contains(view, "z • reset napcards progress.") {
 		t.Fatalf("expected reset cards hint alongside folder actions, got %q", view)
 	}
 }
 
-func TestFolderDashboardShowsResetFlashcardsHintForMixedDecks(t *testing.T) {
-	m := newTestModel()
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
-	m.config.FlashcardsEnabled = true
-	folder := Folder(defaultSnippetFolder)
-	m.Lists[folder] = newList([]list.Item{
-		Snippet{Name: "00-cards", Folder: defaultSnippetFolder, File: "00-cards.txt", Language: "txt"},
-		Snippet{Name: "00-cards+", Folder: defaultSnippetFolder, File: "00-cards+.txt", Language: "txt"},
-		Snippet{Name: "00-cards-", Folder: defaultSnippetFolder, File: "00-cards-.txt", Language: "txt"},
-	}, 20, m.ListStyle)
-	m.Folders.SetItems([]list.Item{folder})
-	m.Folders.Select(0)
-
-	m.displayFolderDashboard()
-	view := m.Code.View()
-	if !strings.Contains(view, "flashcards  ready + answered cards") {
-		t.Fatalf("expected mixed flashcard status in dashboard, got %q", view)
-	}
-	if !strings.Contains(view, "results     1 correct, 1 incorrect, 1 pending") {
-		t.Fatalf("expected flashcard result counts in dashboard, got %q", view)
-	}
-	if !strings.Contains(view, "remaining   2") {
-		t.Fatalf("expected derived remaining count in dashboard, got %q", view)
-	}
-	if !strings.Contains(view, "z • reset answered cards to 00-cards.") {
-		t.Fatalf("expected reset hint for mixed decks in folder dashboard, got %q", view)
-	}
-}
-
 func TestFolderDashboardRefreshShowsResetFlashcardsHintWithoutManualKeyRefresh(t *testing.T) {
+	tmp := tmpHome(t)
 	m := newTestModel()
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.config.Home = tmp
 	m.config.FlashcardsEnabled = true
 	folder := Folder(defaultSnippetFolder)
-	m.Lists[folder] = newList([]list.Item{
-		Snippet{
-			Name:     "00-cards+",
-			Folder:   defaultSnippetFolder,
-			File:     "00-cards+.txt",
-			Language: "txt",
+	deck := Snippet{
+		Name:     nativeFlashcardDeckStem,
+		Folder:   defaultSnippetFolder,
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	if err := writeNativeFlashcardState(tmp, deck, nativeFlashcardState{
+		Cards: map[string]nativeFlashcardProgress{
+			"linux-paging-4level-walk": {Reviews: 1, LastGrade: flashcardGradeGood, DueAt: time.Now().Add(24 * time.Hour)},
 		},
-	}, 20, m.ListStyle)
+	}); err != nil {
+		t.Fatalf("could not write native flashcard state: %v", err)
+	}
+	m.Lists[folder] = newList([]list.Item{deck}, 20, m.ListStyle)
 	m.Folders.SetItems([]list.Item{folder})
 	m.Folders.Select(0)
 
@@ -1496,8 +1563,39 @@ func TestFolderDashboardRefreshShowsResetFlashcardsHintWithoutManualKeyRefresh(t
 
 	updated, _ := m.Update(cmd())
 	view := updated.(*Model).Code.View()
-	if !strings.Contains(view, "z • reset answered cards to 00-cards.") {
+	if !strings.Contains(view, "z • reset napcards progress.") {
 		t.Fatalf("expected live dashboard refresh to show reset hint, got %q", view)
+	}
+}
+
+func TestFolderDashboardShowsResetFlashcardsHintForNativeDeckProgress(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	folder := Folder(defaultSnippetFolder)
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write native deck: %v", err)
+	}
+	if err := writeNativeFlashcardState(tmp, deck, nativeFlashcardState{
+		Cards: map[string]nativeFlashcardProgress{
+			"linux-paging-4level-walk": {Reviews: 1, LastGrade: flashcardGradeGood, DueAt: time.Now().Add(24 * time.Hour)},
+		},
+	}); err != nil {
+		t.Fatalf("could not write native flashcard state: %v", err)
+	}
+	m.Lists[folder] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{folder})
+	m.Folders.Select(0)
+
+	m.displayFolderDashboard()
+	if view := m.Code.View(); !strings.Contains(view, "z • reset napcards progress.") {
+		t.Fatalf("expected native progress to show reset hint, got %q", view)
 	}
 }
 
@@ -1505,16 +1603,10 @@ func TestFolderTreeHidesFlashcardDeckEntries(t *testing.T) {
 	m := newTestModel()
 	folder := Folder(defaultSnippetFolder)
 	m.Lists[folder].InsertItem(1, Snippet{
-		Name:     "00-cards",
+		Name:     nativeFlashcardDeckStem,
 		Folder:   defaultSnippetFolder,
-		File:     "00-cards.txt",
-		Language: "txt",
-	})
-	m.Lists[folder].InsertItem(1, Snippet{
-		Name:     "00-cards+",
-		Folder:   defaultSnippetFolder,
-		File:     "00-cards+.txt",
-		Language: "txt",
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
 	})
 	sortSnippetList(m.Lists[folder])
 	m.rebuildFolderTree()
@@ -1527,58 +1619,22 @@ func TestFolderTreeHidesFlashcardDeckEntries(t *testing.T) {
 		if ok && isHiddenFlashcardDeck(snippet) {
 			t.Fatalf("expected answered flashcard decks to stay hidden from folder tree, got %v", snippet)
 		}
-		if ok && snippet.File == "00-cards.txt" {
+		if ok && snippet.File == nativeFlashcardDeckStem+".md" {
 			visiblePending = true
 		}
 	}
 	if !visiblePending {
-		t.Fatal("expected plain 00-cards deck to stay visible in the folder tree")
-	}
-}
-
-func TestFolderTreeShowsDescendantFlashcardDots(t *testing.T) {
-	m := newNestedFolderTestModel()
-	m.Lists[Folder("work")].InsertItem(len(m.Lists[Folder("work")].Items()), Snippet{
-		Name:     "00-cards+",
-		Folder:   "work",
-		File:     "00-cards+.txt",
-		Language: "txt",
-	})
-	m.Lists[Folder("work/backend")].InsertItem(len(m.Lists[Folder("work/backend")].Items()), Snippet{
-		Name:     "00-cards-",
-		Folder:   "work/backend",
-		File:     "00-cards-.txt",
-		Language: "txt",
-	})
-	sortSnippetList(m.Lists[Folder("work")])
-	sortSnippetList(m.Lists[Folder("work/backend")])
-	m.rebuildFolderTree()
-
-	delegate := folderDelegate{
-		styles:     m.FoldersStyle,
-		depths:     m.folderTree.depths,
-		expanded:   m.folderExpanded,
-		children:   m.folderTree.children,
-		snippets:   m.folderTree.snippets,
-		flashcards: m.folderTree.flashcards,
-	}
-	model := list.New([]list.Item{Folder("work")}, delegate, 40, 1)
-
-	var out bytes.Buffer
-	delegate.Render(&out, model, 0, Folder("work"))
-	rendered := out.String()
-	if strings.Count(rendered, "●") != 2 {
-		t.Fatalf("expected one dot per descendant flashcard deck, got %q", rendered)
+		t.Fatal("expected napcards deck to stay visible in the folder tree")
 	}
 }
 
 func TestFolderTreeDoesNotShowDotForPendingFlashcardDeck(t *testing.T) {
 	m := newNestedFolderTestModel()
 	m.Lists[Folder("work")].InsertItem(len(m.Lists[Folder("work")].Items()), Snippet{
-		Name:     "00-cards",
+		Name:     nativeFlashcardDeckStem,
 		Folder:   "work",
-		File:     "00-cards.txt",
-		Language: "txt",
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
 	})
 	sortSnippetList(m.Lists[Folder("work")])
 	m.rebuildFolderTree()
@@ -1597,5 +1653,51 @@ func TestFolderTreeDoesNotShowDotForPendingFlashcardDeck(t *testing.T) {
 	delegate.Render(&out, model, 0, Folder("work"))
 	if rendered := out.String(); strings.Contains(rendered, "●") {
 		t.Fatalf("expected pending flashcard deck to avoid status dots, got %q", rendered)
+	}
+}
+
+func TestFolderTreeShowsDotForNativeFlashcardProgress(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newNestedFolderTestModel()
+	m.config.Home = tmp
+	deck := Snippet{
+		Name:     nativeFlashcardDeckStem,
+		Folder:   "work",
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "work"), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "work", deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write native deck: %v", err)
+	}
+	if err := writeNativeFlashcardState(tmp, deck, nativeFlashcardState{
+		Cards: map[string]nativeFlashcardProgress{
+			"linux-paging-4level-walk": {Reviews: 1, LastGrade: flashcardGradeGood, DueAt: time.Now().Add(24 * time.Hour)},
+		},
+	}); err != nil {
+		t.Fatalf("could not write native flashcard state: %v", err)
+	}
+	m.Lists[Folder("work")].InsertItem(len(m.Lists[Folder("work")].Items()), deck)
+	sortSnippetList(m.Lists[Folder("work")])
+	m.rebuildFolderTree()
+
+	delegate := folderDelegate{
+		styles:     m.FoldersStyle,
+		home:       tmp,
+		depths:     m.folderTree.depths,
+		expanded:   m.folderExpanded,
+		children:   m.folderTree.children,
+		snippets:   m.folderTree.snippets,
+		flashcards: m.folderTree.flashcards,
+	}
+	model := list.New([]list.Item{Folder("work")}, delegate, 40, 1)
+
+	var out bytes.Buffer
+	delegate.Render(&out, model, 0, Folder("work"))
+	if rendered := out.String(); !strings.Contains(rendered, "●") {
+		t.Fatalf("expected native flashcard progress to render a dot, got %q", rendered)
 	}
 }

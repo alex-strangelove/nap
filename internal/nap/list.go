@@ -101,6 +101,7 @@ func (f Folder) FilterValue() string {
 type folderDelegate struct {
 	styles     FoldersBaseStyle
 	compact    bool
+	home       string
 	depths     map[Folder]int
 	expanded   map[Folder]bool
 	children   map[Folder][]Folder
@@ -192,7 +193,7 @@ func (d folderDelegate) itemStatus(item list.Item) string {
 		return ""
 	}
 
-	states := descendantFlashcardStates(d.children, d.flashcards, folder)
+	states := descendantFlashcardStates(d.home, d.children, d.flashcards, folder, time.Now())
 	if len(states) == 0 {
 		return ""
 	}
@@ -283,12 +284,16 @@ func folderIndicator(children map[Folder][]Folder, snippets map[Folder][]Snippet
 	return "▸ "
 }
 
-func descendantFlashcardStates(children map[Folder][]Folder, flashcards map[Folder][]Snippet, folder Folder) []flashcardDeckState {
+func descendantFlashcardStates(home string, children map[Folder][]Folder, flashcards map[Folder][]Snippet, folder Folder, now time.Time) []flashcardDeckState {
 	states := make([]flashcardDeckState, 0, len(flashcards[folder]))
 
 	var walk func(Folder)
 	walk = func(current Folder) {
 		for _, snippet := range flashcards[current] {
+			if isNativeFlashcardDeck(snippet) {
+				states = append(states, nativeFlashcardIndicatorStates(home, snippet, now)...)
+				continue
+			}
 			state, ok := flashcardDeckStateForSnippet(snippet)
 			if !ok {
 				continue

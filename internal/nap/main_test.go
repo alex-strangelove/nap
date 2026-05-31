@@ -227,14 +227,10 @@ func TestReadConfigFlashcardsEnvOverride(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("NAP_CONFIG", filepath.Join(tmp, "missing-config.yaml"))
 	t.Setenv("NAP_FLASHCARDS_ENABLED", "false")
-	t.Setenv("NAP_FLASHCARDS_COMMAND", "/usr/local/bin/hascard --daily")
 
 	config := readConfig()
 	if config.FlashcardsEnabled {
 		t.Fatal("flashcards_enabled env override was not applied")
-	}
-	if config.FlashcardsCommand != "/usr/local/bin/hascard --daily" {
-		t.Fatalf("flashcards_command env override mismatch: got %q", config.FlashcardsCommand)
 	}
 }
 

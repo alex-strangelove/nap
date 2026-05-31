@@ -15,14 +15,26 @@ import (
 )
 
 func runModelCmd(m *Model, cmd tea.Cmd) *Model {
-	for cmd != nil {
+	queue := []tea.Cmd{cmd}
+	for len(queue) > 0 {
+		cmd = queue[0]
+		queue = queue[1:]
+		if cmd == nil {
+			continue
+		}
 		msg := cmd()
 		if msg == nil {
-			return m
+			continue
+		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			queue = append(batch, queue...)
+			continue
 		}
 		updated, next := m.Update(msg)
 		m = updated.(*Model)
-		cmd = next
+		if next != nil {
+			queue = append([]tea.Cmd{next}, queue...)
+		}
 	}
 	return m
 }

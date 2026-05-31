@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,51 +13,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestGetFlashcardsCommand(t *testing.T) {
-	tests := []struct {
-		name    string
-		config  Config
-		command string
-		args    []string
-	}{
-		{
-			name:    "default",
-			config:  newConfig(),
-			command: defaultFlashcardsCommand,
-		},
-		{
-			name: "custom command with flags",
-			config: Config{
-				FlashcardsCommand: "uvx hascard",
-			},
-			command: "uvx",
-			args:    []string{"hascard"},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			command, args := getFlashcardsCommand(tc.config)
-			if command != tc.command {
-				t.Fatalf("flashcards command mismatch: got %q want %q", command, tc.command)
-			}
-			if fmt.Sprint(args) != fmt.Sprint(tc.args) {
-				t.Fatalf("flashcards args mismatch: got %v want %v", args, tc.args)
-			}
-		})
-	}
-}
-
 func TestIsFlashcardDeckFile(t *testing.T) {
 	tests := map[string]bool{
-		"00-cards.txt":  true,
-		"00-cards+.md":  true,
-		"00-cards-.txt": true,
-		"00-review.md":  false,
-		"000-review.md": false,
-		"00-cards.go":   false,
-		"01-cards.txt":  false,
-		"cards.txt":     false,
+		"00-nap-cards.md":  true,
+		"00-review.md":     false,
+		"000-review.md":    false,
+		"00-cards.go":      false,
+		"01-cards.txt":     false,
+		"00-nap-cards.txt": false,
+		"cards.txt":        false,
 	}
 
 	for file, want := range tests {
@@ -94,7 +59,7 @@ func TestCreateFlashcardDeck(t *testing.T) {
 	}
 
 	deck := decks[0]
-	if deck.File != defaultFlashcardDeckStem+defaultFlashcardExtension {
+	if deck.File != nativeFlashcardDeckStem+".md" {
 		t.Fatalf("flashcard deck file mismatch: got %q", deck.File)
 	}
 
@@ -102,7 +67,7 @@ func TestCreateFlashcardDeck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not read flashcard deck: %v", err)
 	}
-	if string(content) != defaultFlashcardDeckContent() {
+	if string(content) != defaultNativeFlashcardDeckContent() {
 		t.Fatalf("flashcard deck content mismatch: got %q", string(content))
 	}
 }
@@ -112,8 +77,8 @@ func TestCurrentFlashcardDeckRejectsMultipleDecks(t *testing.T) {
 	m.config.FlashcardsEnabled = true
 	folder := Folder(defaultSnippetFolder)
 	m.Lists[folder] = newList([]list.Item{
-		Snippet{Name: "00-cards", Folder: defaultSnippetFolder, File: "00-cards.txt", Language: "txt", Date: time.Now()},
-		Snippet{Name: "00-cards+", Folder: defaultSnippetFolder, File: "00-cards+.txt", Language: "txt", Date: time.Now()},
+		Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()},
+		Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()},
 	}, 20, m.ListStyle)
 
 	if _, err := m.currentFlashcardDeck(); err == nil {
@@ -121,16 +86,15 @@ func TestCurrentFlashcardDeckRejectsMultipleDecks(t *testing.T) {
 	}
 }
 
-func TestReviewDeckPrefersPendingDeckWhenAnsweredDeckAlsoExists(t *testing.T) {
+func TestReviewDeckReturnsNativeDeck(t *testing.T) {
 	deck, err := classifyFlashcardDecks([]Snippet{
-		{Name: "00-cards", Folder: defaultSnippetFolder, File: "00-cards.txt", Language: "txt", Date: time.Now()},
-		{Name: "00-cards+", Folder: defaultSnippetFolder, File: "00-cards+.txt", Language: "txt", Date: time.Now()},
+		{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()},
 	}).reviewDeck()
 	if err != nil {
-		t.Fatalf("expected pending deck to stay reviewable, got %v", err)
+		t.Fatalf("expected native deck to be reviewable, got %v", err)
 	}
-	if deck.File != "00-cards.txt" {
-		t.Fatalf("expected pending deck to be reviewed first, got %q", deck.File)
+	if deck.File != nativeFlashcardDeckStem+".md" {
+		t.Fatalf("expected native deck to be selected, got %q", deck.File)
 	}
 }
 
@@ -151,92 +115,38 @@ func TestReviewFlashcardsDoesNotCreateDeckWhenMissing(t *testing.T) {
 	}
 }
 
-func TestResetFlashcardsRenamesAnsweredDeckToPlainDeck(t *testing.T) {
-	tmp := tmpHome(t)
-	m := newTestModel()
-	m.config.Home = tmp
-	m.config.FlashcardsEnabled = true
-	folder := Folder(defaultSnippetFolder)
-	deck := Snippet{
-		Name:     "00-cards+",
-		Folder:   defaultSnippetFolder,
-		File:     "00-cards+.txt",
-		Language: "txt",
-		Date:     time.Now(),
-	}
-	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
-		t.Fatalf("could not create deck folder: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte("# cards"), 0o644); err != nil {
-		t.Fatalf("could not write answered deck: %v", err)
-	}
-	m.Lists[folder] = newList([]list.Item{deck}, 20, m.ListStyle)
-	m.Folders.SetItems([]list.Item{folder})
-	m.Folders.Select(0)
-	m.updateKeyMap()
-
-	msg := m.resetFlashcards()()
-	if _, ok := msg.(updateFoldersMsg); !ok {
-		t.Fatalf("reset flashcards message mismatch: got %#v", msg)
-	}
-
-	decks := m.flashcardDecks(folder)
-	if len(decks) != 1 {
-		t.Fatalf("expected one flashcard deck after reset, got %d", len(decks))
-	}
-	if decks[0].File != "00-cards.txt" {
-		t.Fatalf("expected plain flashcard deck after reset, got %q", decks[0].File)
-	}
-	if _, err := os.Stat(filepath.Join(tmp, defaultSnippetFolder, "00-cards.txt")); err != nil {
-		t.Fatalf("expected plain flashcard deck on disk, got %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(tmp, defaultSnippetFolder, "00-cards+.txt")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected answered flashcard deck to be renamed away, got err=%v", err)
-	}
-}
-
-func TestResetFlashcardDecksOnDiskMergesAnsweredCardsIntoPendingDeck(t *testing.T) {
+func TestResetNativeFlashcardProgressOnDiskRemovesState(t *testing.T) {
 	tmp := tmpHome(t)
 	folder := defaultSnippetFolder
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: folder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()}
 	if err := os.MkdirAll(filepath.Join(tmp, folder), 0o755); err != nil {
 		t.Fatalf("could not create deck folder: %v", err)
 	}
-
-	pending := Snippet{Name: "00-cards", Folder: folder, File: "00-cards.txt", Language: "txt", Date: time.Now()}
-	positive := Snippet{Name: "00-cards+", Folder: folder, File: "00-cards+.txt", Language: "txt", Date: time.Now()}
-	negative := Snippet{Name: "00-cards-", Folder: folder, File: "00-cards-.txt", Language: "txt", Date: time.Now()}
-	if err := os.WriteFile(filepath.Join(tmp, folder, pending.File), []byte("pending"), 0o644); err != nil {
-		t.Fatalf("could not write pending deck: %v", err)
+	if err := os.WriteFile(filepath.Join(tmp, folder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write native deck: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(tmp, folder, positive.File), []byte("correct"), 0o644); err != nil {
-		t.Fatalf("could not write positive deck: %v", err)
+	state := nativeFlashcardState{
+		Cards: map[string]nativeFlashcardProgress{
+			"linux-paging-4level-walk": {Reviews: 1, LastGrade: flashcardGradeGood, DueAt: time.Now().Add(24 * time.Hour)},
+		},
 	}
-	if err := os.WriteFile(filepath.Join(tmp, folder, negative.File), []byte("incorrect"), 0o644); err != nil {
-		t.Fatalf("could not write negative deck: %v", err)
+	if err := writeNativeFlashcardState(tmp, deck, state); err != nil {
+		t.Fatalf("could not write native state: %v", err)
 	}
 
-	reset, answered, err := resetFlashcardDecksOnDisk(tmp, []Snippet{pending, positive, negative})
+	reset, err := resetNativeFlashcardProgressOnDisk(tmp, []Snippet{deck})
 	if err != nil {
-		t.Fatalf("expected reset merge to succeed, got %v", err)
+		t.Fatalf("expected native reset to succeed, got %v", err)
 	}
-	if reset.File != pending.File {
-		t.Fatalf("expected reset to keep plain deck file, got %q", reset.File)
+	if len(reset) != 1 || reset[0].File != deck.File {
+		t.Fatalf("expected native reset to report the deck, got %#v", reset)
 	}
-	if len(answered) != 2 {
-		t.Fatalf("expected both answered decks to be reset, got %d", len(answered))
-	}
-
-	content, err := os.ReadFile(filepath.Join(tmp, folder, pending.File))
+	path, err := nativeFlashcardStatePath(tmp, deck)
 	if err != nil {
-		t.Fatalf("could not read merged deck: %v", err)
+		t.Fatalf("could not resolve native state path: %v", err)
 	}
-	if string(content) != "pending\n\ncorrect\n\nincorrect" {
-		t.Fatalf("merged deck content mismatch: got %q", string(content))
-	}
-	for _, file := range []string{positive.File, negative.File} {
-		if _, err := os.Stat(filepath.Join(tmp, folder, file)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("expected answered deck %q to be removed, got err=%v", file, err)
-		}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected native state file to be removed, got err=%v", err)
 	}
 }
 
@@ -245,21 +155,20 @@ func TestUpdateContentShowsDashboardWhenFolderContainsHiddenFlashcards(t *testin
 	m := newTestModel()
 	m.config.Home = tmp
 	m.config.FlashcardsEnabled = true
-	m.config.FlashcardsCommand = "true"
 	m.pane = contentPane
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
 	deck := Snippet{
-		Name:     "00-cards",
+		Name:     nativeFlashcardDeckStem,
 		Folder:   defaultSnippetFolder,
-		File:     "00-cards.md",
+		File:     nativeFlashcardDeckStem + ".md",
 		Language: "md",
 		Date:     time.Now(),
 	}
 	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
 		t.Fatalf("could not create deck folder: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte("# cards"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
 		t.Fatalf("could not write deck: %v", err)
 	}
 	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
@@ -271,8 +180,8 @@ func TestUpdateContentShowsDashboardWhenFolderContainsHiddenFlashcards(t *testin
 	if cmd == nil {
 		return
 	}
-	if got := fmt.Sprintf("%T", cmd()); got == "tea.execMsg" {
-		t.Fatalf("expected folder dashboard update, got flashcard exec command")
+	if got := fmt.Sprintf("%T", cmd()); got != "nap.contentRenderedMsg" {
+		t.Fatalf("expected folder dashboard update, got %s", got)
 	}
 }
 
@@ -281,21 +190,20 @@ func TestPreviousPaneOpensFlashcardsForDeckSnippet(t *testing.T) {
 	m := newTestModel()
 	m.config.Home = tmp
 	m.config.FlashcardsEnabled = true
-	m.config.FlashcardsCommand = "true"
 	m.pane = contentPane
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
 	deck := Snippet{
-		Name:     "00-cards",
+		Name:     nativeFlashcardDeckStem,
 		Folder:   defaultSnippetFolder,
-		File:     "00-cards.md",
+		File:     nativeFlashcardDeckStem + ".md",
 		Language: "md",
 		Date:     time.Now(),
 	}
 	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
 		t.Fatalf("could not create deck folder: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte("# cards"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
 		t.Fatalf("could not write deck: %v", err)
 	}
 	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
@@ -307,12 +215,12 @@ func TestPreviousPaneOpensFlashcardsForDeckSnippet(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected left pane switch to launch flashcards")
 	}
-	if got := fmt.Sprintf("%T", cmd()); got != "tea.BatchMsg" {
-		t.Fatalf("expected batched pane switch and flashcard launch, got %s", got)
-	}
 	got := updated.(*Model)
-	if got.pane != folderPane {
-		t.Fatalf("expected left pane switch to focus folder pane, got %v", got.pane)
+	if got.pane != contentPane {
+		t.Fatalf("expected native review to keep content pane focused, got %v", got.pane)
+	}
+	if got.state != reviewingFlashcardsState {
+		t.Fatalf("expected native review state after left pane switch, got %v", got.state)
 	}
 }
 
@@ -321,20 +229,19 @@ func TestSnippetTreeRightOpensFlashcards(t *testing.T) {
 	m := newTestModel()
 	m.config.Home = tmp
 	m.config.FlashcardsEnabled = true
-	m.config.FlashcardsCommand = "true"
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
 	deck := Snippet{
-		Name:     "00-cards",
+		Name:     nativeFlashcardDeckStem,
 		Folder:   defaultSnippetFolder,
-		File:     "00-cards.md",
+		File:     nativeFlashcardDeckStem + ".md",
 		Language: "md",
 		Date:     time.Now(),
 	}
 	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
 		t.Fatalf("could not create deck folder: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte("# cards"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
 		t.Fatalf("could not write deck: %v", err)
 	}
 	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
@@ -346,11 +253,137 @@ func TestSnippetTreeRightOpensFlashcards(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected right to launch flashcards")
 	}
-	if got := fmt.Sprintf("%T", cmd()); got != "tea.execMsg" {
-		t.Fatalf("expected flashcard exec command, got %s", got)
+	if got := updated.(*Model); got.pane != contentPane {
+		t.Fatalf("expected native review to focus content pane, got %v", got.pane)
 	}
-	if got := updated.(*Model); got.pane != folderPane {
-		t.Fatalf("expected right to keep focus in folder pane, got %v", got.pane)
+	if got := updated.(*Model); got.state != reviewingFlashcardsState {
+		t.Fatalf("expected native review state, got %v", got.state)
+	}
+}
+
+func TestReviewFlashcardsStartsNativeSession(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	deck := Snippet{
+		Name:     nativeFlashcardDeckStem,
+		Folder:   defaultSnippetFolder,
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{Folder(defaultSnippetFolder)})
+	m.Folders.Select(0)
+
+	cmd := m.reviewFlashcards()
+	if cmd == nil {
+		t.Fatal("expected native review command")
+	}
+	if m.state != reviewingFlashcardsState {
+		t.Fatalf("expected native review state, got %v", m.state)
+	}
+	if m.flashcardSession == nil {
+		t.Fatal("expected native review session")
+	}
+}
+
+func TestGradeNativeFlashcardWritesState(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	deck := Snippet{
+		Name:     nativeFlashcardDeckStem,
+		Folder:   defaultSnippetFolder,
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{Folder(defaultSnippetFolder)})
+	m.Folders.Select(0)
+
+	if cmd := m.reviewFlashcards(); cmd == nil {
+		t.Fatal("expected native review command")
+	}
+	m.flashcardSession.Revealed = true
+
+	if cmd := m.gradeNativeFlashcard(flashcardGradeGood); cmd == nil {
+		t.Fatal("expected native grading update")
+	}
+	path, err := nativeFlashcardStatePath(tmp, deck)
+	if err != nil {
+		t.Fatalf("could not resolve state path: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected native flashcard state file, got %v", err)
+	}
+}
+
+func TestStopNativeFlashcardReviewRestoresContent(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	deck := Snippet{
+		Name:     nativeFlashcardDeckStem,
+		Folder:   defaultSnippetFolder,
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Lists[Folder(defaultSnippetFolder)].Select(0)
+	m.Folders.SetItems([]list.Item{Folder(defaultSnippetFolder)})
+	m.Folders.Select(0)
+
+	cmd := m.reviewFlashcards()
+	if cmd == nil {
+		t.Fatal("expected native review command")
+	}
+	m = runModelCmd(m, cmd)
+	if m.state != reviewingFlashcardsState {
+		t.Fatalf("expected reviewing state before stop review, got %v", m.state)
+	}
+	got := runModelCmd(m, m.stopNativeFlashcardReview())
+
+	if got.state != navigatingState {
+		t.Fatalf("expected navigating state after stop review, got %v", got.state)
+	}
+	if got.flashcardSession != nil {
+		t.Fatal("expected flashcard session to be cleared")
+	}
+	if strings.Contains(got.Code.View(), "stop review") {
+		t.Fatalf("expected review screen to be replaced, got %q", got.Code.View())
+	}
+	if !strings.Contains(got.Code.View(), "review cards for this folder") {
+		t.Fatalf("expected folder dashboard to be restored, got %q", got.Code.View())
 	}
 }
 
@@ -359,14 +392,13 @@ func TestOpenFlashcardsOnPaneLeftIgnoresHiddenDecksWhenFolderIsSelected(t *testi
 	m := newTestModel()
 	m.config.Home = tmp
 	m.config.FlashcardsEnabled = true
-	m.config.FlashcardsCommand = "true"
 	m.pane = contentPane
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
 	deck := Snippet{
-		Name:     "00-cards",
+		Name:     ".00-nap-cards",
 		Folder:   defaultSnippetFolder,
-		File:     "00-cards.md",
+		File:     ".00-nap-cards.md",
 		Language: "md",
 		Date:     time.Now(),
 	}
@@ -383,131 +415,5 @@ func TestOpenFlashcardsOnPaneLeftIgnoresHiddenDecksWhenFolderIsSelected(t *testi
 
 	if cmd := m.openFlashcardsOnPaneLeft(); cmd != nil {
 		t.Fatalf("expected hidden flashcards to stay off the tree/dashboard flow, got %T", cmd())
-	}
-}
-
-func TestPreviewFlashcardsReturnsToFolderNavigation(t *testing.T) {
-	m := newTestModel()
-	m.config.FlashcardsEnabled = true
-	m.config.FlashcardsCommand = "hascard"
-	m.pane = contentPane
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
-
-	deck := Snippet{
-		Name:     "00-cards",
-		Folder:   defaultSnippetFolder,
-		File:     "00-cards.md",
-		Language: "md",
-		Date:     time.Now(),
-	}
-	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
-	m.Lists[Folder(defaultSnippetFolder)].Select(0)
-	m.Folders.SetItems([]list.Item{deck})
-	m.Folders.Select(0)
-
-	updated, cmd := m.Update(flashcardsFinishedMsg{snippetPath: deck.Path(), preview: true})
-	if cmd == nil {
-		t.Fatal("expected preview return to refresh folder selection")
-	}
-	if got := updated.(*Model); got.pane != folderPane {
-		t.Fatalf("expected preview return to focus folder pane, got %v", got.pane)
-	}
-}
-
-func TestFlashcardsFinishedRefreshesRenamedDecksFromDisk(t *testing.T) {
-	tmp := tmpHome(t)
-	m := newTestModel()
-	m.config.Home = tmp
-	m.config.FlashcardsEnabled = true
-	folder := Folder(defaultSnippetFolder)
-	deck := Snippet{
-		Name:     "00-cards",
-		Folder:   defaultSnippetFolder,
-		File:     "00-cards.txt",
-		Language: "txt",
-		Date:     time.Now(),
-	}
-	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
-		t.Fatalf("could not create deck folder: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte("# cards"), 0o644); err != nil {
-		t.Fatalf("could not write pending deck: %v", err)
-	}
-	m.Lists[folder] = newList([]list.Item{deck}, 20, m.ListStyle)
-	m.Folders.SetItems([]list.Item{folder})
-	m.Folders.Select(0)
-	m.updateKeyMap()
-
-	renamedPath := filepath.Join(tmp, defaultSnippetFolder, "00-cards+.txt")
-	if err := os.Rename(filepath.Join(tmp, defaultSnippetFolder, deck.File), renamedPath); err != nil {
-		t.Fatalf("could not rename reviewed deck: %v", err)
-	}
-
-	updated, cmd := m.Update(flashcardsFinishedMsg{
-		folder:      folder,
-		snippetPath: deck.Path(),
-	})
-	got := runModelCmd(updated.(*Model), cmd)
-
-	decks := got.flashcardDecks(folder)
-	if len(decks) != 1 {
-		t.Fatalf("expected one flashcard deck after refresh, got %d", len(decks))
-	}
-	if decks[0].File != "00-cards+.txt" {
-		t.Fatalf("expected renamed deck to be reloaded from disk, got %q", decks[0].File)
-	}
-	if item, ok := got.selectedFolderItem().(Folder); !ok || item != folder {
-		t.Fatalf("expected refresh to focus folder dashboard, got %#v", got.selectedFolderItem())
-	}
-	if !got.keys.ResetFlashcards.Enabled() {
-		t.Fatal("expected reset flashcards to become available after reviewed deck refresh")
-	}
-}
-
-func TestFlashcardPreviewRelaunchesAfterReturningToPreview(t *testing.T) {
-	tmp := tmpHome(t)
-	m := newTestModel()
-	m.config.Home = tmp
-	m.config.FlashcardsEnabled = true
-	m.config.FlashcardsCommand = "true"
-	m.pane = contentPane
-	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
-
-	deck := Snippet{
-		Name:     "00-cards",
-		Folder:   defaultSnippetFolder,
-		File:     "00-cards.md",
-		Language: "md",
-		Date:     time.Now(),
-	}
-	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
-		t.Fatalf("could not create deck folder: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte("# cards"), 0o644); err != nil {
-		t.Fatalf("could not write deck: %v", err)
-	}
-	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
-	m.Lists[Folder(defaultSnippetFolder)].Select(0)
-	m.Folders.SetItems([]list.Item{deck})
-	m.Folders.Select(0)
-
-	updated, _ := m.Update(flashcardsFinishedMsg{snippetPath: deck.Path(), preview: true})
-	got := updated.(*Model)
-
-	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyTab})
-	if cmd == nil {
-		t.Fatal("expected tab to switch back to preview")
-	}
-	got = updated.(*Model)
-	if got.pane != contentPane {
-		t.Fatalf("expected tab to enter preview, got %v", got.pane)
-	}
-
-	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	if cmd == nil {
-		t.Fatal("expected left pane switch to relaunch flashcards")
-	}
-	if kind := fmt.Sprintf("%T", cmd()); kind != "tea.BatchMsg" {
-		t.Fatalf("expected batched pane switch and flashcard relaunch, got %s", kind)
 	}
 }

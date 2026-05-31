@@ -71,8 +71,10 @@ func buildFolderTree(lists map[Folder]*list.Model) folderTree {
 			if !ok {
 				continue
 			}
-			if isHiddenFlashcardDeck(snippet) {
+			if isFlashcardDeck(snippet) {
 				tree.flashcards[folder] = append(tree.flashcards[folder], snippet)
+			}
+			if isHiddenFlashcardDeck(snippet) {
 				continue
 			}
 
