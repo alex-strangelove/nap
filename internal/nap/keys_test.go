@@ -1496,10 +1496,10 @@ func TestFolderDashboardShowsFlashcardReadyStatus(t *testing.T) {
 	if view := m.Code.View(); !strings.Contains(view, "flashcards  ready to review") {
 		t.Fatalf("expected ready flashcards status in dashboard, got %q", view)
 	}
-	if view := m.Code.View(); !strings.Contains(view, "cards       3 root, 0 nested") {
+	if view := m.Code.View(); !strings.Contains(view, "cards       4 root, 0 nested") {
 		t.Fatalf("expected flashcard count in dashboard, got %q", view)
 	}
-	if view := m.Code.View(); !strings.Contains(view, "results     0 correct, 0 recall, 0 incorrect, 3 pending") {
+	if view := m.Code.View(); !strings.Contains(view, "results     0 correct, 0 recall, 0 incorrect, 4 pending") {
 		t.Fatalf("expected flashcard result counts in dashboard, got %q", view)
 	}
 	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardPositive.Render("0 correct")) {
@@ -1511,7 +1511,7 @@ func TestFolderDashboardShowsFlashcardReadyStatus(t *testing.T) {
 	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardNegative.Render("0 incorrect")) {
 		t.Fatalf("expected incorrect count to use negative style, got %q", view)
 	}
-	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardPending.Render("3 pending")) {
+	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardPending.Render("4 pending")) {
 		t.Fatalf("expected pending count to use pending style, got %q", view)
 	}
 	if view := m.Code.View(); strings.Contains(view, "remaining   ") {
@@ -1590,7 +1590,7 @@ func TestFolderDashboardShowsRecallCountForHardReviews(t *testing.T) {
 	m.Folders.Select(0)
 
 	m.displayFolderDashboard()
-	if view := m.Code.View(); !strings.Contains(view, "results     1 correct, 1 recall, 0 incorrect, 1 pending") {
+	if view := m.Code.View(); !strings.Contains(view, "results     1 correct, 1 recall, 0 incorrect, 2 pending") {
 		t.Fatalf("expected recall count in dashboard, got %q", view)
 	}
 	if view := m.Code.View(); strings.Contains(view, "remaining   ") {

@@ -63,3 +63,36 @@ This card is for rehearsing the sequence itself, not just recognizing individual
 
 Tags:
 x86_64/boot, linux/init, firmware
+
++++
+
+<!-- id: syscall-trace-openat -->
+<!-- type: trace -->
+
+Prompt:
+What does the kernel do next after user space issues `openat(AT_FDCWD, "/etc/hosts", O_RDONLY)`?
+
+Trace:
+```text
+userspace -> glibc wrapper -> syscall instruction
+pt_regs prepared with:
+  rax = __NR_openat
+  rdi = AT_FDCWD
+  rsi = "/etc/hosts"
+  rdx = O_RDONLY
+```
+
+Options:
+- Return directly to userspace without entering the kernel.
+- Enter the syscall dispatch path and resolve `__x64_sys_openat`.
+- Raise a page fault because the pathname lives in user memory.
+- Jump straight into the block layer.
+
+Correct:
+- Enter the syscall dispatch path and resolve `__x64_sys_openat`.
+
+Explanation:
+The syscall instruction transfers into the kernel entry path, which dispatches on `rax` before the file-open logic copies and validates user memory.
+
+Tags:
+linux/syscalls, x86_64/entry, vfs

@@ -45,6 +45,7 @@ const (
 	nativeFlashcardTypeMultiChoice   nativeFlashcardType = "multi-choice"
 	nativeFlashcardTypeCodeCloze     nativeFlashcardType = "code-cloze"
 	nativeFlashcardTypeOrderedRecall nativeFlashcardType = "ordered-recall"
+	nativeFlashcardTypeTrace         nativeFlashcardType = "trace"
 )
 
 type nativeFlashcard struct {
@@ -52,6 +53,7 @@ type nativeFlashcard struct {
 	Type           nativeFlashcardType
 	Tags           []string
 	Question       string
+	Trace          string
 	Answer         string
 	Explanation    string
 	Options        []string
@@ -337,11 +339,12 @@ func parseNativeFlashcardBlockV2(block string) (nativeFlashcard, error) {
 	}
 
 	card.Question = strings.TrimSpace(sections["Prompt"])
+	card.Trace = strings.TrimSpace(sections["Trace"])
 	card.Answer = strings.TrimSpace(sections["Answer"])
 	card.Explanation = strings.TrimSpace(sections["Explanation"])
 	card.Options = parseNativeFlashcardListSection(sections["Options"])
 	card.CorrectOptions = parseNativeFlashcardListSection(sections["Correct"])
-	if card.Type != nativeFlashcardTypeOrderedRecall && len(card.CorrectOptions) == 0 && card.Answer != "" {
+	if card.Type != nativeFlashcardTypeOrderedRecall && card.Type != nativeFlashcardTypeTrace && len(card.CorrectOptions) == 0 && card.Answer != "" {
 		card.CorrectOptions = []string{card.Answer}
 	}
 	if tagsText := strings.TrimSpace(sections["Tags"]); tagsText != "" {
@@ -372,6 +375,22 @@ func parseNativeFlashcardBlockV2(block string) (nativeFlashcard, error) {
 			return nativeFlashcard{}, fmt.Errorf("%w: ordered-recall cards use the Options section as the canonical order", errNativeFlashcardDeckInvalid)
 		}
 		card.CorrectOptions = slices.Clone(card.Options)
+	case nativeFlashcardTypeTrace:
+		if card.Trace == "" {
+			return nativeFlashcard{}, fmt.Errorf("%w: trace cards need a Trace section", errNativeFlashcardDeckInvalid)
+		}
+		if len(card.Options) > 0 {
+			if card.Answer != "" {
+				return nativeFlashcard{}, fmt.Errorf("%w: trace cards must use either options/correct or answer, not both", errNativeFlashcardDeckInvalid)
+			}
+			if len(card.Options) < 2 || len(card.CorrectOptions) != 1 {
+				return nativeFlashcard{}, fmt.Errorf("%w: trace cards with options need exactly one correct answer", errNativeFlashcardDeckInvalid)
+			}
+		} else {
+			if card.Answer == "" || len(card.CorrectOptions) > 0 {
+				return nativeFlashcard{}, fmt.Errorf("%w: reveal-only trace cards need an Answer section and no Correct section", errNativeFlashcardDeckInvalid)
+			}
+		}
 	}
 
 	return card, nil
@@ -404,7 +423,7 @@ func parseNativeFlashcardSections(lines []string) (map[string]string, error) {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		switch trimmed {
-		case "Prompt:", "Options:", "Answer:", "Correct:", "Explanation:", "Tags:":
+		case "Prompt:", "Trace:", "Options:", "Answer:", "Correct:", "Explanation:", "Tags:":
 			store()
 			current = strings.TrimSuffix(trimmed, ":")
 			continue
@@ -846,6 +865,17 @@ func (m *Model) submitNativeFlashcardAnswer() tea.Cmd {
 			return m.appendNativeFlashcardOrderedStep()
 		}
 		m.flashcardSession.Phase = nativeFlashcardPhaseResult
+	case nativeFlashcardTypeTrace:
+		if len(card.Options) == 0 {
+			m.flashcardSession.Phase = nativeFlashcardPhaseResult
+			return m.updateContent()
+		}
+		index, ok := m.flashcardSession.optionIndexAtCursor(card)
+		if !ok {
+			return nil
+		}
+		m.flashcardSession.Selections = map[int]bool{index: true}
+		m.flashcardSession.Phase = nativeFlashcardPhaseResult
 	default:
 		return nil
 	}
@@ -916,6 +946,7 @@ func (m *Model) displayNativeFlashcardReview() {
 		lines = append(lines, m.ContentStyle.EmptyHint.Render(fmt.Sprintf("tags        %s", strings.Join(card.Tags, ", "))))
 	}
 	lines = append(lines, "", card.Question, "")
+	lines = append(lines, m.renderNativeFlashcardTrace(card)...)
 	lines = append(lines, m.renderNativeFlashcardOptions(card)...)
 	lines = append(lines, m.renderNativeFlashcardResult(card)...)
 
@@ -960,6 +991,18 @@ func (m *Model) renderNativeFlashcardOptions(card nativeFlashcard) []string {
 	}
 	lines = append(lines, "")
 	return lines
+}
+
+func (m *Model) renderNativeFlashcardTrace(card nativeFlashcard) []string {
+	if card.Type != nativeFlashcardTypeTrace || strings.TrimSpace(card.Trace) == "" {
+		return nil
+	}
+	return []string{
+		m.ContentStyle.EmptyHint.Render("trace"),
+		"",
+		card.Trace,
+		"",
+	}
 }
 
 func (m *Model) renderNativeFlashcardOrderedRecallOptions(card nativeFlashcard) []string {
@@ -1052,7 +1095,7 @@ func (m *Model) renderNativeFlashcardResultLabel(label string) string {
 }
 
 func (m *Model) nativeFlashcardResultLabel(card nativeFlashcard) string {
-	if card.Type == nativeFlashcardTypeBasic {
+	if card.Type == nativeFlashcardTypeBasic || (card.Type == nativeFlashcardTypeTrace && len(card.Options) == 0) {
 		return "revealed"
 	}
 	if card.Type == nativeFlashcardTypeOrderedRecall {
@@ -1094,6 +1137,18 @@ func (m *Model) nativeFlashcardHints(card nativeFlashcard) []keyHint {
 				{binding: keyBinding("backspace", "remove last step"), help: "remove last step"},
 				{binding: keyBinding("esc", "stop review"), help: "stop review"},
 			}
+		case nativeFlashcardTypeTrace:
+			if len(card.Options) == 0 {
+				return []keyHint{
+					{binding: keyBinding("space/enter", "reveal answer"), help: "reveal answer"},
+					{binding: keyBinding("esc", "stop review"), help: "stop review"},
+				}
+			}
+			return []keyHint{
+				{binding: keyBinding("↑/↓", "move"), help: "move"},
+				{binding: keyBinding("enter", "submit answer"), help: "submit answer"},
+				{binding: keyBinding("esc", "stop review"), help: "stop review"},
+			}
 		default:
 			return []keyHint{
 				{binding: keyBinding("↑/↓", "move"), help: "move"},
@@ -1114,7 +1169,7 @@ func keyBinding(keyName, helpText string) key.Binding {
 
 func (t nativeFlashcardType) valid() bool {
 	switch t {
-	case nativeFlashcardTypeBasic, nativeFlashcardTypeSingleChoice, nativeFlashcardTypeMultiChoice, nativeFlashcardTypeCodeCloze, nativeFlashcardTypeOrderedRecall:
+	case nativeFlashcardTypeBasic, nativeFlashcardTypeSingleChoice, nativeFlashcardTypeMultiChoice, nativeFlashcardTypeCodeCloze, nativeFlashcardTypeOrderedRecall, nativeFlashcardTypeTrace:
 		return true
 	default:
 		return false

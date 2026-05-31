@@ -77,8 +77,8 @@ func TestParseNativeFlashcardDeckV2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected v2 deck to parse, got %v", err)
 	}
-	if len(deck.Cards) != 3 {
-		t.Fatalf("expected three cards, got %d", len(deck.Cards))
+	if len(deck.Cards) != 4 {
+		t.Fatalf("expected four cards, got %d", len(deck.Cards))
 	}
 	if deck.Cards[0].Type != nativeFlashcardTypeBasic {
 		t.Fatalf("expected first card to stay basic, got %q", deck.Cards[0].Type)
@@ -94,6 +94,12 @@ func TestParseNativeFlashcardDeckV2(t *testing.T) {
 	}
 	if len(deck.Cards[2].CorrectOptions) != len(deck.Cards[2].Options) {
 		t.Fatalf("expected ordered-recall options to define the correct order, got %#v", deck.Cards[2].CorrectOptions)
+	}
+	if deck.Cards[3].Type != nativeFlashcardTypeTrace {
+		t.Fatalf("expected fourth card to be trace, got %q", deck.Cards[3].Type)
+	}
+	if deck.Cards[3].Trace == "" {
+		t.Fatal("expected trace card to keep trace content")
 	}
 }
 
@@ -116,6 +122,28 @@ firmware
 
 	if _, err := parseNativeFlashcardDeck([]byte(content)); err == nil {
 		t.Fatal("expected ordered-recall card with answer section to be rejected")
+	}
+}
+
+func TestParseTraceRejectsMissingTraceSection(t *testing.T) {
+	content := `<!-- nap-deck: v2 -->
+
+<!-- id: syscall-path -->
+<!-- type: trace -->
+
+Prompt:
+What happens next?
+
+Options:
+- Enter the kernel
+- Return to user space
+
+Correct:
+- Enter the kernel
+`
+
+	if _, err := parseNativeFlashcardDeck([]byte(content)); err == nil {
+		t.Fatal("expected trace card without trace section to be rejected")
 	}
 }
 
@@ -694,6 +722,72 @@ MAP_PRIVATE | MAP_ANONYMOUS
 	}
 }
 
+func TestSubmitTraceChoiceFlashcardShowsTraceAndCorrectResult(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(traceChoiceDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{Folder(defaultSnippetFolder)})
+	m.Folders.Select(0)
+
+	if cmd := m.reviewFlashcards(); cmd == nil {
+		t.Fatal("expected native review command")
+	} else {
+		m = runModelCmd(m, cmd)
+	}
+	if view := m.Code.View(); !strings.Contains(view, "trace") || !strings.Contains(view, "glibc wrapper") {
+		t.Fatalf("expected trace content in question view, got %q", view)
+	}
+	m.flashcardSession.Cursor = 1
+	if cmd := m.submitNativeFlashcardAnswer(); cmd == nil {
+		t.Fatal("expected submit answer command")
+	} else {
+		m = runModelCmd(m, cmd)
+	}
+	if m.flashcardSession.Phase != nativeFlashcardPhaseResult {
+		t.Fatalf("expected result phase, got %v", m.flashcardSession.Phase)
+	}
+	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardPositive.Render("correct")) {
+		t.Fatalf("expected correct trace result label, got %q", view)
+	}
+	if view := m.Code.View(); !strings.Contains(view, "glibc wrapper") {
+		t.Fatalf("expected trace content to stay visible in result view, got %q", view)
+	}
+}
+
+func TestSubmitTraceRevealFlashcardShowsRevealedResult(t *testing.T) {
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m.state = reviewingFlashcardsState
+	m.flashcardSession = flashcardTestSession(t, traceRevealDeckContent())
+
+	card := m.flashcardSession.currentCard()
+	if cmd := m.submitNativeFlashcardAnswer(); cmd == nil {
+		t.Fatal("expected reveal trace command")
+	} else {
+		m = runModelCmd(m, cmd)
+	}
+	if got := m.nativeFlashcardResultLabel(card); got != "revealed" {
+		t.Fatalf("expected reveal-only trace to be marked revealed, got %q", got)
+	}
+	if view := m.Code.View(); !strings.Contains(view, m.ContentStyle.FlashcardPending.Render("revealed")) {
+		t.Fatalf("expected revealed trace result label, got %q", view)
+	}
+	if view := m.Code.View(); !strings.Contains(view, "page-fault exception") {
+		t.Fatalf("expected trace answer in result view, got %q", view)
+	}
+}
+
 func TestOpenFlashcardsOnPaneLeftIgnoresHiddenDecksWhenFolderIsSelected(t *testing.T) {
 	tmp := tmpHome(t)
 	m := newTestModel()
@@ -725,12 +819,12 @@ func TestOpenFlashcardsOnPaneLeftIgnoresHiddenDecksWhenFolderIsSelected(t *testi
 	}
 }
 
-func orderedRecallTestSession(t *testing.T, content string) *nativeFlashcardReviewSession {
+func flashcardTestSession(t *testing.T, content string) *nativeFlashcardReviewSession {
 	t.Helper()
 
 	parsed, err := parseNativeFlashcardDeck([]byte(content))
 	if err != nil {
-		t.Fatalf("could not parse ordered recall deck: %v", err)
+		t.Fatalf("could not parse flashcard deck: %v", err)
 	}
 	session, err := buildNativeFlashcardReviewSession(
 		Snippet{
@@ -745,9 +839,14 @@ func orderedRecallTestSession(t *testing.T, content string) *nativeFlashcardRevi
 		time.Now(),
 	)
 	if err != nil {
-		t.Fatalf("could not build ordered recall session: %v", err)
+		t.Fatalf("could not build flashcard session: %v", err)
 	}
 	return session
+}
+
+func orderedRecallTestSession(t *testing.T, content string) *nativeFlashcardReviewSession {
+	t.Helper()
+	return flashcardTestSession(t, content)
 }
 
 func orderedRecallCursorForOption(t *testing.T, session *nativeFlashcardReviewSession, card nativeFlashcard, want int) int {
@@ -775,5 +874,45 @@ Options:
 - firmware
 - bootloader
 - kernel
+`
+}
+
+func traceChoiceDeckContent() string {
+	return `<!-- nap-deck: v2 -->
+
+<!-- id: syscall-openat-trace -->
+<!-- type: trace -->
+
+Prompt:
+What happens next?
+
+Trace:
+userspace -> glibc wrapper -> syscall instruction
+
+Options:
+- Return directly to userspace.
+- Enter the syscall dispatch path.
+- Jump into the block layer.
+
+Correct:
+- Enter the syscall dispatch path.
+`
+}
+
+func traceRevealDeckContent() string {
+	return `<!-- nap-deck: v2 -->
+
+<!-- id: page-fault-trace -->
+<!-- type: trace -->
+
+Prompt:
+What fault path is this describing?
+
+Trace:
+CPU loads from a not-present user page
+hardware raises #PF
+
+Answer:
+The CPU raises a page-fault exception and control transfers into the kernel page-fault handler.
 `
 }
