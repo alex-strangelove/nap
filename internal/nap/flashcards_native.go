@@ -205,7 +205,7 @@ func parseNativeFlashcardDeckV1(lines []string) (nativeFlashcardDeck, error) {
 		}
 		question, answer, err := parseNativeFlashcardBodyV1(strings.Join(lines[bodyStart:index], "\n"))
 		if err != nil {
-			return nativeFlashcardDeck{}, err
+			return nativeFlashcardDeck{}, wrapNativeFlashcardCardError(len(deck.Cards)+1, metadata.ID, err)
 		}
 		deck.Cards = append(deck.Cards, nativeFlashcard{
 			ID:       strings.TrimSpace(metadata.ID),
@@ -219,24 +219,32 @@ func parseNativeFlashcardDeckV1(lines []string) (nativeFlashcardDeck, error) {
 	if len(deck.Cards) == 0 {
 		return nativeFlashcardDeck{}, fmt.Errorf("%w: no cards found", errNativeFlashcardDeckInvalid)
 	}
+	if err := validateNativeFlashcardDeck(deck); err != nil {
+		return nativeFlashcardDeck{}, err
+	}
 	return deck, nil
 }
 
 func parseNativeFlashcardDeckV2(lines []string) (nativeFlashcardDeck, error) {
 	blocks := splitNativeFlashcardBlocks(strings.Join(lines, "\n"), "+++")
 	deck := nativeFlashcardDeck{Cards: make([]nativeFlashcard, 0, len(blocks))}
+	blockIndex := 0
 	for _, block := range blocks {
 		if strings.TrimSpace(block) == "" {
 			continue
 		}
+		blockIndex++
 		card, err := parseNativeFlashcardBlockV2(block)
 		if err != nil {
-			return nativeFlashcardDeck{}, err
+			return nativeFlashcardDeck{}, wrapNativeFlashcardCardError(blockIndex, nativeFlashcardBlockID(block), err)
 		}
 		deck.Cards = append(deck.Cards, card)
 	}
 	if len(deck.Cards) == 0 {
 		return nativeFlashcardDeck{}, fmt.Errorf("%w: no cards found", errNativeFlashcardDeckInvalid)
+	}
+	if err := validateNativeFlashcardDeck(deck); err != nil {
+		return nativeFlashcardDeck{}, err
 	}
 	return deck, nil
 }
@@ -432,12 +440,65 @@ func parseNativeFlashcardSections(lines []string) (map[string]string, error) {
 			if trimmed == "" {
 				continue
 			}
-			return nil, fmt.Errorf("%w: unexpected content before first section", errNativeFlashcardDeckInvalid)
+			return nil, fmt.Errorf("%w: unexpected content before first section (expected one of Prompt, Trace, Options, Answer, Correct, Explanation, Tags)", errNativeFlashcardDeckInvalid)
 		}
 		buffer = append(buffer, line)
 	}
 	store()
 	return sections, nil
+}
+
+func validateNativeFlashcardDeck(deck nativeFlashcardDeck) error {
+	seen := make(map[string]int, len(deck.Cards))
+	for idx, card := range deck.Cards {
+		position := idx + 1
+		if previous, ok := seen[card.ID]; ok {
+			return fmt.Errorf("%w: %s: duplicate card id %q (already used by card %d)", errNativeFlashcardDeckInvalid, nativeFlashcardCardLabel(position, card.ID), card.ID, previous)
+		}
+		seen[card.ID] = position
+	}
+	return nil
+}
+
+func nativeFlashcardBlockID(block string) string {
+	lines := strings.Split(strings.TrimSpace(block), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		key, value, ok := parseNativeFlashcardCommentMetadata(trimmed)
+		if !ok {
+			break
+		}
+		if key == "id" {
+			return value
+		}
+	}
+	return ""
+}
+
+func wrapNativeFlashcardCardError(position int, id string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, errNativeFlashcardDeckInvalid) {
+		return err
+	}
+	return fmt.Errorf("%w: %s: %s", errNativeFlashcardDeckInvalid, nativeFlashcardCardLabel(position, id), nativeFlashcardErrorDetail(err))
+}
+
+func nativeFlashcardCardLabel(position int, id string) string {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Sprintf("card %d", position)
+	}
+	return fmt.Sprintf("card %d (id %s)", position, id)
+}
+
+func nativeFlashcardErrorDetail(err error) string {
+	detail := strings.TrimPrefix(err.Error(), errNativeFlashcardDeckInvalid.Error())
+	detail = strings.TrimPrefix(detail, ":")
+	return strings.TrimSpace(detail)
 }
 
 func parseNativeFlashcardListSection(section string) []string {
@@ -665,6 +726,17 @@ func resetNativeFlashcardProgressOnDisk(home string, decks []Snippet) ([]Snippet
 		reset = append(reset, deck)
 	}
 	return reset, nil
+}
+
+func removeNativeFlashcardStateOnDisk(home string, deck Snippet) error {
+	path, err := nativeFlashcardStatePath(home, deck)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func nativeFlashcardIndicatorStates(home string, deck Snippet, now time.Time) []flashcardDeckState {

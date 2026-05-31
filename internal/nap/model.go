@@ -2157,6 +2157,9 @@ func (m *Model) ensureFlashcardDeck() (Snippet, error) {
 		return Snippet{}, err
 	}
 
+	if err := removeNativeFlashcardStateOnDisk(m.config.Home, deck); err != nil {
+		return Snippet{}, err
+	}
 	if err := os.WriteFile(path, []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
 		return Snippet{}, err
 	}
@@ -2292,7 +2295,16 @@ func (m *Model) deleteSelectedSnippet() tea.Cmd {
 		if !ok {
 			return m.updateFoldersForSelection(m.selectedFolderItem(), false)()
 		}
-		_ = os.Remove(m.selectedSnippetFilePath())
+		if err := os.Remove(m.selectedSnippetFilePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			m.displayError(err.Error())
+			return m.updateFoldersForSelection(m.selectedFolderItem(), false)()
+		}
+		if isNativeFlashcardDeck(snippet) {
+			if err := removeNativeFlashcardStateOnDisk(m.config.Home, snippet); err != nil {
+				m.displayError(err.Error())
+				return m.updateFoldersForSelection(m.selectedFolderItem(), false)()
+			}
+		}
 		for idx, item := range m.List().Items() {
 			candidate, ok := item.(Snippet)
 			if ok && candidate.Path() == snippet.Path() {

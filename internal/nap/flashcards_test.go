@@ -72,6 +72,44 @@ func TestCreateFlashcardDeck(t *testing.T) {
 	}
 }
 
+func TestCreateFlashcardDeckClearsStaleNativeState(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.updateKeyMap()
+
+	deck := Snippet{
+		Name:     nativeFlashcardDeckStem,
+		Date:     time.Now(),
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
+		Folder:   defaultSnippetFolder,
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := writeNativeFlashcardState(tmp, deck, nativeFlashcardState{
+		Cards: map[string]nativeFlashcardProgress{
+			"linux-paging-4level-walk": {Reviews: 1, LastGrade: flashcardGradeGood, DueAt: time.Now().Add(24 * time.Hour)},
+		},
+	}); err != nil {
+		t.Fatalf("could not seed stale native state: %v", err)
+	}
+
+	if msg := m.createFlashcardDeck()(); msg == nil {
+		t.Fatal("expected create flashcard deck message")
+	}
+
+	statePath, err := nativeFlashcardStatePath(tmp, deck)
+	if err != nil {
+		t.Fatalf("could not resolve native state path: %v", err)
+	}
+	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected stale native state to be cleared on deck creation, got err=%v", err)
+	}
+}
+
 func TestParseNativeFlashcardDeckV2(t *testing.T) {
 	deck, err := parseNativeFlashcardDeck([]byte(defaultNativeFlashcardDeckContent()))
 	if err != nil {
@@ -144,6 +182,74 @@ Correct:
 
 	if _, err := parseNativeFlashcardDeck([]byte(content)); err == nil {
 		t.Fatal("expected trace card without trace section to be rejected")
+	} else if !strings.Contains(err.Error(), "card 1 (id syscall-path): trace cards need a Trace section") {
+		t.Fatalf("expected contextual parse error, got %v", err)
+	}
+}
+
+func TestParseNativeFlashcardDeckV2ErrorIncludesCardContext(t *testing.T) {
+	content := `<!-- nap-deck: v2 -->
+
+<!-- id: good-card -->
+<!-- type: basic -->
+
+Prompt:
+What does CR3 point to?
+
+Answer:
+The top-level page table.
+
++++
+
+<!-- id: broken-card -->
+<!-- type: trace -->
+
+Prompt:
+What happens next?
+
+Options:
+- Enter the kernel
+- Return to user mode
+
+Correct:
+- Enter the kernel
+`
+
+	if _, err := parseNativeFlashcardDeck([]byte(content)); err == nil {
+		t.Fatal("expected invalid second card to be rejected")
+	} else if !strings.Contains(err.Error(), "card 2 (id broken-card): trace cards need a Trace section") {
+		t.Fatalf("expected second-card context in parse error, got %v", err)
+	}
+}
+
+func TestParseNativeFlashcardDeckRejectsDuplicateCardIDs(t *testing.T) {
+	content := `<!-- nap-deck: v2 -->
+
+<!-- id: duplicate-card -->
+<!-- type: basic -->
+
+Prompt:
+First prompt.
+
+Answer:
+First answer.
+
++++
+
+<!-- id: duplicate-card -->
+<!-- type: basic -->
+
+Prompt:
+Second prompt.
+
+Answer:
+Second answer.
+`
+
+	if _, err := parseNativeFlashcardDeck([]byte(content)); err == nil {
+		t.Fatal("expected duplicate card ids to be rejected")
+	} else if !strings.Contains(err.Error(), `card 2 (id duplicate-card): duplicate card id "duplicate-card"`) {
+		t.Fatalf("expected duplicate id parse error, got %v", err)
 	}
 }
 
@@ -322,6 +428,54 @@ func TestReviewFlashcardsDoesNotCreateDeckWhenMissing(t *testing.T) {
 	}
 }
 
+func TestReviewFlashcardsShowsContextualDeckValidationError(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.Update(tea.WindowSizeMsg{Width: 220, Height: 40})
+	folder := Folder(defaultSnippetFolder)
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	content := `<!-- nap-deck: v2 -->
+
+<!-- id: duplicate-card -->
+<!-- type: basic -->
+
+Prompt:
+First prompt.
+
+Answer:
+First answer.
+
++++
+
+<!-- id: duplicate-card -->
+<!-- type: basic -->
+
+Prompt:
+Second prompt.
+
+Answer:
+Second answer.
+`
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(content), 0o644); err != nil {
+		t.Fatalf("could not write invalid deck: %v", err)
+	}
+	m.Lists[folder] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{folder})
+	m.Folders.Select(0)
+
+	if cmd := m.reviewFlashcards(); cmd != nil {
+		t.Fatalf("expected invalid deck review to stop with an error, got %T", cmd())
+	}
+	if view := m.Code.View(); !strings.Contains(view, `card 2 (id duplicate-card): duplicate card id "duplicate-card"`) {
+		t.Fatalf("expected contextual validation error in UI, got %q", view)
+	}
+}
+
 func TestResetNativeFlashcardProgressOnDiskRemovesState(t *testing.T) {
 	tmp := tmpHome(t)
 	folder := defaultSnippetFolder
@@ -354,6 +508,47 @@ func TestResetNativeFlashcardProgressOnDiskRemovesState(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected native state file to be removed, got err=%v", err)
+	}
+}
+
+func TestDeleteSelectedSnippetRemovesNativeState(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	folder := Folder(defaultSnippetFolder)
+	deck := Snippet{Name: nativeFlashcardDeckStem, Folder: defaultSnippetFolder, File: nativeFlashcardDeckStem + ".md", Language: "md", Date: time.Now()}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write native deck: %v", err)
+	}
+	if err := writeNativeFlashcardState(tmp, deck, nativeFlashcardState{
+		Cards: map[string]nativeFlashcardProgress{
+			"linux-paging-4level-walk": {Reviews: 1, LastGrade: flashcardGradeGood, DueAt: time.Now().Add(24 * time.Hour)},
+		},
+	}); err != nil {
+		t.Fatalf("could not write native state: %v", err)
+	}
+	m.Lists[folder] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{deck})
+	m.Folders.Select(0)
+	m.Lists[folder].Select(0)
+
+	if cmd := m.deleteSelectedSnippet(); cmd == nil {
+		t.Fatal("expected delete selected snippet command")
+	} else {
+		_ = cmd()
+	}
+
+	statePath, err := nativeFlashcardStatePath(tmp, deck)
+	if err != nil {
+		t.Fatalf("could not resolve native state path: %v", err)
+	}
+	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected native state file to be removed with deck deletion, got err=%v", err)
 	}
 }
 
