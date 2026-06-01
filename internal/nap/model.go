@@ -1559,11 +1559,7 @@ func (m *Model) updatePaneLayout(totalWidth int) {
 
 	m.Folders.Title = m.foldersTitle()
 	m.LineNumbers.Width = 5
-	if m.isCollapsedPreview() {
-		m.Code.Width = totalWidth - m.LineNumbers.Width - 2
-	} else {
-		m.Code.Width = totalWidth - snippetWidth - folderWidth - 20
-	}
+	m.Code.Width = totalWidth - snippetWidth - folderWidth - previewWidthOffset
 	if m.Code.Width < minContentPaneWidth {
 		m.Code.Width = minContentPaneWidth
 	}

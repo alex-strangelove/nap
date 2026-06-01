@@ -1014,6 +1014,45 @@ func TestReviewFlashcardsStartsNativeSession(t *testing.T) {
 	}
 }
 
+func TestReviewFlashcardsUsesFullContentPaneWidth(t *testing.T) {
+	tmp := tmpHome(t)
+	m := newTestModel()
+	m.config.Home = tmp
+	m.config.FlashcardsEnabled = true
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	deck := Snippet{
+		Name:     nativeFlashcardDeckStem,
+		Folder:   defaultSnippetFolder,
+		File:     nativeFlashcardDeckStem + ".md",
+		Language: "md",
+		Date:     time.Now(),
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, defaultSnippetFolder), 0o755); err != nil {
+		t.Fatalf("could not create deck folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, defaultSnippetFolder, deck.File), []byte(defaultNativeFlashcardDeckContent()), 0o644); err != nil {
+		t.Fatalf("could not write deck: %v", err)
+	}
+	m.Lists[Folder(defaultSnippetFolder)] = newList([]list.Item{deck}, 20, m.ListStyle)
+	m.Folders.SetItems([]list.Item{Folder(defaultSnippetFolder)})
+	m.Folders.Select(0)
+
+	cmd := m.reviewFlashcards()
+	if cmd == nil {
+		t.Fatal("expected native review command")
+	}
+	m = runModelCmd(m, cmd)
+
+	wantPreviewWidth := 100 - m.Folders.Width()
+	if got := m.previewWidth(); got != wantPreviewWidth {
+		t.Fatalf("review pane width mismatch: got %d want %d", got, wantPreviewWidth)
+	}
+	if got := m.Code.Width; got != wantPreviewWidth-previewWidthOffset {
+		t.Fatalf("review viewport width mismatch: got %d want %d", got, wantPreviewWidth-previewWidthOffset)
+	}
+}
+
 func TestGradeNativeFlashcardWritesState(t *testing.T) {
 	tmp := tmpHome(t)
 	m := newTestModel()
