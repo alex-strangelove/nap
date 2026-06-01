@@ -16,6 +16,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wordwrap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -954,6 +956,7 @@ func (m *Model) startNativeFlashcardReview(deck Snippet) tea.Cmd {
 	m.state = reviewingFlashcardsState
 	m.pane = contentPane
 	m.updateKeyMap()
+	m.resizeContentViewports()
 	return m.updateContent()
 }
 
@@ -966,6 +969,7 @@ func (m *Model) stopNativeFlashcardReview() tea.Cmd {
 	m.state = navigatingState
 	m.List().SetDelegate(snippetDelegate{styles: m.ListStyle, state: navigatingState, compact: m.isCollapsedPreview()})
 	m.updateKeyMap()
+	m.resizeContentViewports()
 	return m.updateFoldersForSelection(folder, true)
 }
 
@@ -1157,7 +1161,7 @@ func (m *Model) displayNativeFlashcardReview() {
 	if len(card.Tags) > 0 {
 		lines = append(lines, m.ContentStyle.EmptyHint.Render(fmt.Sprintf("tags        %s", strings.Join(card.Tags, ", "))))
 	}
-	lines = append(lines, "", card.Question, "")
+	lines = append(lines, "", m.renderNativeFlashcardMarkdown(card.Question), "")
 	lines = append(lines, m.renderNativeFlashcardTrace(card)...)
 	lines = append(lines, m.renderNativeFlashcardOptions(card)...)
 	lines = append(lines, m.renderNativeFlashcardResult(card)...)
@@ -1166,10 +1170,35 @@ func (m *Model) displayNativeFlashcardReview() {
 		lines = append(lines, fmt.Sprintf("%s %s", m.ContentStyle.EmptyHintKey.Render(hint.binding.Help().Key), m.ContentStyle.EmptyHint.Render("• "+hint.help)))
 	}
 
-	m.LineNumbers.SetContent(strings.Repeat("  ~ \n", len(lines)))
+	content := strings.Join(lines, "\n")
+	m.LineNumbers.SetContent(strings.Repeat("  ~ \n", lipgloss.Height(content)))
 	m.LineNumbers.SetYOffset(0)
-	m.Code.SetContent(strings.Join(lines, "\n"))
+	m.Code.SetContent(content)
 	m.Code.SetYOffset(0)
+}
+
+func (m *Model) renderNativeFlashcardMarkdown(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	if m.Code.Width <= 0 {
+		return content
+	}
+
+	lines := strings.Split(content, "\n")
+	wrapped := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			wrapped = append(wrapped, "")
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			wrapped = append(wrapped, line)
+			continue
+		}
+		wrapped = append(wrapped, strings.Split(wordwrap.String(line, m.Code.Width), "\n")...)
+	}
+	return strings.Join(wrapped, "\n")
 }
 
 func (m *Model) renderNativeFlashcardOptions(card nativeFlashcard) []string {
@@ -1212,7 +1241,7 @@ func (m *Model) renderNativeFlashcardTrace(card nativeFlashcard) []string {
 	return []string{
 		m.ContentStyle.EmptyHint.Render("trace"),
 		"",
-		card.Trace,
+		m.renderNativeFlashcardMarkdown(card.Trace),
 		"",
 	}
 }
@@ -1264,12 +1293,12 @@ func (m *Model) renderNativeFlashcardResult(card nativeFlashcard) []string {
 		)
 		lines = append(lines, m.renderNativeFlashcardOrderedRecallCheck(card)...)
 	} else if card.Answer != "" {
-		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("answer"), "", card.Answer)
+		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("answer"), "", m.renderNativeFlashcardMarkdown(card.Answer))
 	} else if len(card.CorrectOptions) > 0 {
-		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("correct"), "", strings.Join(card.CorrectOptions, "\n"))
+		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("correct"), "", m.renderNativeFlashcardMarkdown(strings.Join(card.CorrectOptions, "\n")))
 	}
 	if card.Explanation != "" {
-		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("explanation"), "", card.Explanation)
+		lines = append(lines, "", m.ContentStyle.EmptyHint.Render("explanation"), "", m.renderNativeFlashcardMarkdown(card.Explanation))
 	}
 	lines = append(lines, "",
 		fmt.Sprintf("%s %s", m.ContentStyle.EmptyHintKey.Render("1"), m.ContentStyle.EmptyHint.Render("• again")),

@@ -83,6 +83,8 @@ type Model struct {
 	// the height of the terminal.
 	height int
 	width  int
+	// the total window height reported by Bubble Tea.
+	windowHeight int
 	// the working directory.
 	Workdir string
 	// the List of snippets to display to the user.
@@ -318,6 +320,31 @@ func (m *Model) contentWidth(snippet Snippet) int {
 		return m.previewWidth()
 	}
 	return 0
+}
+
+func (m *Model) contentViewportHeight() int {
+	if m.windowHeight <= 0 {
+		return m.height
+	}
+
+	reservedLines := 4
+	if m.state == reviewingFlashcardsState {
+		reservedLines = 1
+	} else if m.help.ShowAll {
+		reservedLines = 8
+	}
+
+	height := m.windowHeight - reservedLines
+	if height < 0 {
+		return 0
+	}
+	return height
+}
+
+func (m *Model) resizeContentViewports() {
+	height := m.contentViewportHeight()
+	m.Code.Height = height
+	m.LineNumbers.Height = height
 }
 
 func (m *Model) cachedContent(snippet Snippet, width int) (contentRenderedMsg, bool) {
@@ -593,13 +620,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		previousCodeWidth := m.Code.Width
 		m.width = msg.Width
+		m.windowHeight = msg.Height
 		m.height = msg.Height - 4
 		for _, li := range m.Lists {
 			li.SetHeight(m.height)
 		}
 		m.Folders.SetHeight(m.height)
-		m.Code.Height = m.height
-		m.LineNumbers.Height = m.height
+		m.resizeContentViewports()
 		m.updatePaneLayout(msg.Width)
 		if m.Code.Width != previousCodeWidth {
 			return m, m.updateContent()
@@ -675,16 +702,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if key.Matches(msg, m.keys.ToggleHelp) {
 				m.help.ShowAll = !m.help.ShowAll
-
-				var newHeight int
+				newHeight := m.height
 				if m.help.ShowAll {
 					newHeight = m.height - 4
-				} else {
-					newHeight = m.height
 				}
 				m.Folders.SetHeight(newHeight)
-				m.Code.Height = newHeight
-				m.LineNumbers.Height = newHeight
+				m.resizeContentViewports()
 				if m.searchResults != nil {
 					m.searchResults.SetHeight(newHeight)
 				}
@@ -821,17 +844,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		case key.Matches(msg, m.keys.ToggleHelp):
 			m.help.ShowAll = !m.help.ShowAll
-
-			var newHeight int
+			newHeight := m.height
 			if m.help.ShowAll {
 				newHeight = m.height - 4
-			} else {
-				newHeight = m.height
 			}
 			m.List().SetHeight(newHeight)
 			m.Folders.SetHeight(newHeight)
-			m.Code.Height = newHeight
-			m.LineNumbers.Height = newHeight
+			m.resizeContentViewports()
 			if m.searchResults != nil {
 				m.searchResults.SetHeight(newHeight)
 			}
@@ -2575,12 +2594,11 @@ func (m *Model) View() string {
 	)
 
 	if m.isCollapsedPreview() {
-		return lipgloss.JoinVertical(
-			lipgloss.Top,
-			contentHeader,
-			contentBody,
-			marginStyle.Render(m.help.View(m.keys)),
-		)
+		sections := []string{contentHeader, contentBody}
+		if m.state != reviewingFlashcardsState {
+			sections = append(sections, marginStyle.Render(m.help.View(m.keys)))
+		}
+		return lipgloss.JoinVertical(lipgloss.Top, sections...)
 	}
 
 	leftPaneBody := m.leftPaneView()
@@ -2588,8 +2606,7 @@ func (m *Model) View() string {
 		leftPaneBody = lipgloss.JoinVertical(lipgloss.Top, header, leftPaneBody)
 	}
 
-	return lipgloss.JoinVertical(
-		lipgloss.Top,
+	sections := []string{
 		lipgloss.JoinHorizontal(
 			lipgloss.Left,
 			m.FoldersStyle.Base.Render(leftPaneBody),
@@ -2598,8 +2615,11 @@ func (m *Model) View() string {
 				contentBody,
 			),
 		),
-		marginStyle.Render(m.help.View(m.keys)),
-	)
+	}
+	if m.state != reviewingFlashcardsState {
+		sections = append(sections, marginStyle.Render(m.help.View(m.keys)))
+	}
+	return lipgloss.JoinVertical(lipgloss.Top, sections...)
 }
 
 func (m *Model) leftPaneView() string {

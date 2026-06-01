@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestIsFlashcardDeckFile(t *testing.T) {
@@ -1143,6 +1145,56 @@ func TestStopNativeFlashcardReviewRestoresContent(t *testing.T) {
 	}
 }
 
+func TestReviewFlashcardsUseFullWindowHeight(t *testing.T) {
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	m.flashcardSession = flashcardTestSession(t, reviewLayoutDeckContent())
+	m.state = reviewingFlashcardsState
+	m.updateKeyMap()
+	m.resizeContentViewports()
+
+	cmd := m.submitNativeFlashcardAnswer()
+	if cmd == nil {
+		t.Fatal("expected review update command")
+	}
+	got := runModelCmd(m, cmd)
+
+	if got.Code.Height != 23 {
+		t.Fatalf("expected review viewport height 23, got %d", got.Code.Height)
+	}
+	if gotHeight := lipgloss.Height(got.View()); gotHeight > 24 {
+		t.Fatalf("expected review view to fit window height, got %d lines", gotHeight)
+	}
+	if footer := marginStyle.Render(got.help.View(got.keys)); strings.Contains(got.View(), footer) {
+		t.Fatalf("expected inline review hints without footer help, got %q", got.View())
+	}
+}
+
+func TestReviewFlashcardsWrapMarkdownAnswerAndExplanation(t *testing.T) {
+	m := newTestModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	m.flashcardSession = flashcardTestSession(t, reviewLayoutDeckContent())
+	m.state = reviewingFlashcardsState
+	m.updateKeyMap()
+	m.resizeContentViewports()
+
+	cmd := m.submitNativeFlashcardAnswer()
+	if cmd == nil {
+		t.Fatal("expected review update command")
+	}
+	got := runModelCmd(m, cmd)
+	view := normalizeANSIText(got.Code.View())
+
+	if !strings.Contains(view, "beginning of") {
+		t.Fatalf("expected wrapped answer text to remain visible, got %q", view)
+	}
+	if !strings.Contains(view, "ELF entry point") {
+		t.Fatalf("expected wrapped explanation text to remain visible, got %q", view)
+	}
+}
+
 func TestSubmitSingleChoiceFlashcardAnswerShowsResult(t *testing.T) {
 	tmp := tmpHome(t)
 	m := newTestModel()
@@ -1400,6 +1452,39 @@ Options:
 - bootloader
 - kernel
 `
+}
+
+func reviewLayoutDeckContent() string {
+	return `<!-- nap-deck: v2 -->
+
+<!-- id: arm-vectors -->
+<!-- type: basic -->
+<!-- tags: u-boot, arm, vectors, linker -->
+
+Prompt:
+How does ARM U-Boot place the exception vectors at the front of the image?
+
+Answer:
+` + "`vectors.S` emits `_start` into the `.vectors` section, and `u-boot.lds` places `*(.vectors)` at the beginning of the image." + `
+
+Explanation:
+The linker script does:
+` + "```ld" + `
+. = 0x00000000;
+.text : {
+    *(.__image_copy_start)
+    *(.vectors)
+    arch/arm/cpu/armv7/start.o (.text*)
+}
+` + "```" + `
+so the vector table becomes the first executable code in the image, and ` + "`ENTRY(_start)` makes `_start` the ELF entry point." + `
+`
+}
+
+func normalizeANSIText(s string) string {
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	whitespace := regexp.MustCompile(`\s+`)
+	return strings.TrimSpace(whitespace.ReplaceAllString(ansi.ReplaceAllString(s, ""), " "))
 }
 
 func traceChoiceDeckContent() string {
