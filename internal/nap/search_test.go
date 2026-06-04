@@ -101,6 +101,143 @@ func TestSearchModeSearchesContentsAndAppliesSelection(t *testing.T) {
 	}
 }
 
+func TestEnterFromSearchOpensViewerForSelectedResult(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     searchMode
+		query    string
+		wantPath string
+	}{
+		{
+			name:     "metadata search",
+			mode:     metadataSearchMode,
+			query:    "roadmap",
+			wantPath: "plans/roadmap.md",
+		},
+		{
+			name:     "content search",
+			mode:     contentSearchMode,
+			query:    "rollback checklist",
+			wantPath: "plans/roadmap.md",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, snippets := newSearchTestModel(t)
+			m = runModelCmd(m, m.updateFoldersForSelection(snippets[1], true))
+
+			if got := m.selectedSnippet().Path(); got != snippets[1].Path() {
+				t.Fatalf("initial selection mismatch: got %q want %q", got, snippets[1].Path())
+			}
+
+			m = runModelCmd(m, m.enterSearchMode(tt.mode, false))
+			m.searchInput.SetValue(tt.query)
+			m = runModelCmd(m, m.refreshSearchResults())
+
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			m = runModelCmd(updated.(*Model), cmd)
+
+			if m.state != navigatingState {
+				t.Fatalf("state mismatch after leaving search: got %v want %v", m.state, navigatingState)
+			}
+			if m.pane != contentPane {
+				t.Fatalf("expected viewer focus after enter: got %v want %v", m.pane, contentPane)
+			}
+			selected, ok := m.selectedFolderItem().(Snippet)
+			if !ok || selected.Path() != tt.wantPath {
+				t.Fatalf("selected snippet mismatch after enter: got %#v want %q", m.selectedFolderItem(), tt.wantPath)
+			}
+		})
+	}
+}
+
+func TestEnterFromInteractiveSearchInputOpensViewerForSelectedResult(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     searchMode
+		query    string
+		wantPath string
+	}{
+		{
+			name:     "metadata search",
+			mode:     metadataSearchMode,
+			query:    "roadmap",
+			wantPath: "plans/roadmap.md",
+		},
+		{
+			name:     "content search",
+			mode:     contentSearchMode,
+			query:    "rollback checklist",
+			wantPath: "plans/roadmap.md",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, snippets := newSearchTestModel(t)
+			m = runModelCmd(m, m.updateFoldersForSelection(snippets[1], true))
+			m = runModelCmd(m, m.enterSearchMode(tt.mode, false))
+
+			for _, r := range tt.query {
+				updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+				m = runModelCmd(updated.(*Model), cmd)
+			}
+
+			if got := m.searchInput.Value(); got != tt.query {
+				t.Fatalf("interactive query mismatch: got %q want %q", got, tt.query)
+			}
+			selected, ok := m.selectedSearchSnippet()
+			if !ok || selected.Path() != tt.wantPath {
+				t.Fatalf("interactive search selection mismatch before enter: got %#v want %q", selected, tt.wantPath)
+			}
+
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			m = runModelCmd(updated.(*Model), cmd)
+
+			if m.state != navigatingState {
+				t.Fatalf("state mismatch after interactive enter: got %v want %v", m.state, navigatingState)
+			}
+			if m.pane != contentPane {
+				t.Fatalf("expected viewer focus after interactive enter: got %v want %v", m.pane, contentPane)
+			}
+			selected, ok = m.selectedFolderItem().(Snippet)
+			if !ok || selected.Path() != tt.wantPath {
+				t.Fatalf("selected snippet mismatch after interactive enter: got %#v want %q", m.selectedFolderItem(), tt.wantPath)
+			}
+		})
+	}
+}
+
+func TestEnterFromSearchExpandsCollapsedResultFolder(t *testing.T) {
+	m, snippets := newSearchTestModel(t)
+	m = runModelCmd(m, m.updateFoldersForSelection(snippets[1], true))
+	m.folderExpanded[Folder("plans")] = false
+
+	m = runModelCmd(m, m.enterSearchMode(contentSearchMode, false))
+	for _, r := range "rollback checklist" {
+		updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = runModelCmd(updated.(*Model), cmd)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = runModelCmd(updated.(*Model), cmd)
+
+	if m.state != navigatingState {
+		t.Fatalf("state mismatch after enter: got %v want %v", m.state, navigatingState)
+	}
+	if m.pane != contentPane {
+		t.Fatalf("expected viewer focus after enter: got %v want %v", m.pane, contentPane)
+	}
+	selected, ok := m.selectedFolderItem().(Snippet)
+	if !ok {
+		t.Fatalf("expected snippet selection after enter, got %T", m.selectedFolderItem())
+	}
+	if selected.Path() != snippets[0].Path() {
+		t.Fatalf("selected snippet mismatch after enter: got %q want %q", selected.Path(), snippets[0].Path())
+	}
+}
+
 func TestSearchModeCtrlJKNavigatesResults(t *testing.T) {
 	m, _ := newSearchTestModel(t)
 	m.enterSearchMode(contentSearchMode, false)

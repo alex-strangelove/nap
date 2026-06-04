@@ -730,6 +730,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.editSearchSelection()
 			}
 			if msg.String() == "enter" {
+				if m.searchMode != previewSearchMode {
+					return m, m.exitSearchModeToViewer()
+				}
 				return m, m.exitSearchMode(true)
 			}
 
@@ -1072,7 +1075,7 @@ func (m *Model) updateFoldersView(selectedItem list.Item, refreshContent bool) t
 	if selectedItem == nil {
 		selectedItem = m.selectedFolderItem()
 	}
-	m.revealFolder(treeItemFolder(selectedItem))
+	m.revealSelection(selectedItem)
 	folderItems := m.folderTree.visibleItems(m.folderExpanded)
 	selectedFolderIndex := visibleFolderIndex(folderItems, selectedItem, m.folderTree.parents)
 
@@ -1123,7 +1126,7 @@ func (m *Model) refreshFromDisk(selectedPath string, selectedFolder Folder) tea.
 	m.updatePaneLayout(m.width)
 
 	selectedItem := m.refreshedSelection(selectedPath, selectedFolder)
-	m.revealFolder(treeItemFolder(selectedItem))
+	m.revealSelection(selectedItem)
 	items := m.folderTree.visibleItems(m.folderExpanded)
 	selectedFolderIndex := visibleFolderIndex(items, selectedItem, m.folderTree.parents)
 
@@ -1174,6 +1177,17 @@ func (m *Model) revealFolder(folder Folder) {
 	}
 	for _, ancestor := range ancestorFolders(folder) {
 		m.folderExpanded[ancestor] = true
+	}
+}
+
+func (m *Model) revealSelection(selectedItem list.Item) {
+	folder := treeItemFolder(selectedItem)
+	if folder == "" {
+		return
+	}
+	m.revealFolder(folder)
+	if _, ok := selectedItem.(Snippet); ok {
+		m.folderExpanded[folder] = true
 	}
 }
 
@@ -2182,6 +2196,22 @@ func (m *Model) exitSearchMode(applySelection bool) tea.Cmd {
 	m.searchInput.Blur()
 	m.updateKeyMap()
 	if applySelection && hasSelection {
+		return m.updateFoldersForSelection(selected, true)
+	}
+	return m.updateContent()
+}
+
+func (m *Model) exitSearchModeToViewer() tea.Cmd {
+	selected, hasSelection := m.selectedSearchSnippet()
+	m.state = navigatingState
+	m.pane = m.searchRestorePane
+	m.searchMatchIndex = 0
+	m.searchInput.Blur()
+	if hasSelection {
+		m.pane = contentPane
+	}
+	m.updateKeyMap()
+	if hasSelection {
 		return m.updateFoldersForSelection(selected, true)
 	}
 	return m.updateContent()
