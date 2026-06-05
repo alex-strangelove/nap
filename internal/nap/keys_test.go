@@ -878,6 +878,93 @@ func TestFolderPaneUppercaseXDeletesSelectedFolderSubtree(t *testing.T) {
 	}
 }
 
+func TestFolderRenameMovesEntireFolderSubtree(t *testing.T) {
+	tmp := t.TempDir()
+	m := newBoundIndexTestModel()
+	m.config.Home = tmp
+	m.pane = folderPane
+	m.folderExpanded[Folder("01-new-folder")] = true
+
+	for path, content := range map[string]string{
+		filepath.Join(tmp, "01-new-folder", "01-index.md"):          "# index\n",
+		filepath.Join(tmp, "01-new-folder", "02-note.md"):           "hello\n",
+		filepath.Join(tmp, "01-new-folder", "child", "01-index.md"): "# child\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("could not create folder: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("could not write snippet: %v", err)
+		}
+	}
+
+	m.Lists = listsForSnippets([]Snippet{
+		{
+			Name:     "01-index",
+			Folder:   "01-new-folder",
+			File:     "01-index.md",
+			Language: "md",
+		},
+		{
+			Name:     "02-note",
+			Folder:   "01-new-folder",
+			File:     "02-note.md",
+			Language: "md",
+		},
+		{
+			Name:     "01-index",
+			Folder:   "01-new-folder/child",
+			File:     "01-index.md",
+			Language: "md",
+		},
+	}, 20, m.ListStyle)
+	m.rebuildFolderTree()
+
+	msg := m.updateFoldersView(Folder("01-new-folder"), false).(updateFoldersMsg)
+	m.Folders.SetItems(msg.items)
+	m.Folders.Select(msg.selectedFolderIndex)
+
+	m.activeInput = folderInput
+	m.state = editingState
+	m.inputs[folderInput].SetValue("01-renamed-folder")
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected rename command")
+	}
+	updated, cmd = updated.(*Model).Update(cmd())
+	if cmd == nil {
+		t.Fatalf("expected refresh command after folder rename")
+	}
+	updated, _ = updated.(*Model).Update(cmd())
+
+	got := updated.(*Model)
+	if got.selectedFolder() != Folder("01-renamed-folder") {
+		t.Fatalf("selected folder mismatch: got %q want %q", got.selectedFolder(), Folder("01-renamed-folder"))
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "01-new-folder")); !os.IsNotExist(err) {
+		t.Fatalf("old folder still exists on disk: %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(tmp, "01-renamed-folder", "01-index.md"),
+		filepath.Join(tmp, "01-renamed-folder", "02-note.md"),
+		filepath.Join(tmp, "01-renamed-folder", "child", "01-index.md"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("renamed folder subtree missing %q: %v", path, err)
+		}
+	}
+	if _, exists := got.Lists[Folder("01-new-folder")]; exists {
+		t.Fatalf("old folder still exists in lists")
+	}
+	if _, exists := got.Lists[Folder("01-renamed-folder")]; !exists {
+		t.Fatalf("renamed folder missing from lists")
+	}
+	if _, exists := got.Lists[Folder("01-renamed-folder/child")]; !exists {
+		t.Fatalf("renamed child folder missing from lists")
+	}
+}
+
 func TestSnippetDeletionPromptDisplaysConfirmation(t *testing.T) {
 	m := newBoundIndexTestModel()
 	m.folderExpanded[Folder("work")] = true

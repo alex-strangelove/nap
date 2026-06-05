@@ -546,37 +546,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if wasEditing {
 				m.blurInputs()
-				i := m.List().Index()
-				snippet := m.selectedSnippet()
-				if m.inputs[nameInput].Value() != "" {
-					snippet.Name = m.inputs[nameInput].Value()
-				} else {
-					snippet.Name = defaultSnippetName
-				}
-				if m.inputs[folderInput].Value() != "" {
-					snippet.Folder = m.inputs[folderInput].Value()
-				} else {
-					snippet.Folder = defaultSnippetFolder
-				}
-				if m.inputs[languageInput].Value() != "" {
-					snippet.Language = m.inputs[languageInput].Value()
-				} else {
-					snippet.Language = m.config.DefaultLanguage
-				}
-				file := fmt.Sprintf("%s.%s", snippet.Name, snippet.Language)
-				snippet.File = file
-				newPath, err := snippetStoragePath(m.config.Home, snippet)
-				if err != nil {
-					m.state = editingState
-					m.displayError(err.Error())
-					return m, m.focusInput(folderInput)
-				}
-				_ = os.MkdirAll(filepath.Dir(newPath), os.ModePerm)
-				_ = os.Rename(m.selectedSnippetFilePath(), newPath)
-				m.invalidateSearchIndex()
-				setCmd := m.List().SetItem(i, snippet)
-				m.pane = contentPane
-				cmd = tea.Batch(setCmd, m.updateFoldersForSelection(Folder(snippet.Folder), false), m.updateContent())
+				cmd = m.finishEditingSelection()
 			}
 		case pastingState:
 			content, err := clipboard.ReadAll()
@@ -2509,6 +2479,92 @@ func (m *Model) createNewFolderAt(parent Folder) tea.Cmd {
 		m.state = navigatingState
 		m.updateKeyMap()
 		return m.updateFoldersForSelection(snippet, true)()
+	}
+}
+
+func (m *Model) finishEditingSelection() tea.Cmd {
+	if target, ok := m.selectedFolderItem().(Folder); ok && m.activeInput == folderInput {
+		return m.renameSelectedFolder(target)
+	}
+	return m.finishEditingSnippet()
+}
+
+func (m *Model) finishEditingSnippet() tea.Cmd {
+	i := m.List().Index()
+	snippet := m.selectedSnippet()
+	if m.inputs[nameInput].Value() != "" {
+		snippet.Name = m.inputs[nameInput].Value()
+	} else {
+		snippet.Name = defaultSnippetName
+	}
+	if m.inputs[folderInput].Value() != "" {
+		snippet.Folder = m.inputs[folderInput].Value()
+	} else {
+		snippet.Folder = defaultSnippetFolder
+	}
+	if m.inputs[languageInput].Value() != "" {
+		snippet.Language = m.inputs[languageInput].Value()
+	} else {
+		snippet.Language = m.config.DefaultLanguage
+	}
+	file := fmt.Sprintf("%s.%s", snippet.Name, snippet.Language)
+	snippet.File = file
+	newPath, err := snippetStoragePath(m.config.Home, snippet)
+	if err != nil {
+		m.state = editingState
+		m.displayError(err.Error())
+		return m.focusInput(folderInput)
+	}
+	_ = os.MkdirAll(filepath.Dir(newPath), os.ModePerm)
+	_ = os.Rename(m.selectedSnippetFilePath(), newPath)
+	m.invalidateSearchIndex()
+	setCmd := m.List().SetItem(i, snippet)
+	m.pane = contentPane
+	return tea.Batch(setCmd, m.updateFoldersForSelection(Folder(snippet.Folder), false), m.updateContent())
+}
+
+func (m *Model) renameSelectedFolder(target Folder) tea.Cmd {
+	next := strings.TrimSpace(m.inputs[folderInput].Value())
+	if next == "" {
+		next = defaultSnippetFolder
+	}
+	renamed := Folder(filepath.ToSlash(next))
+	if renamed == target {
+		return m.updateFoldersForSelection(target, true)
+	}
+	if isSameOrDescendantFolder(target, renamed) {
+		m.state = editingState
+		m.displayError("folder cannot be moved into itself")
+		return m.focusInput(folderInput)
+	}
+
+	currentPath, err := resolveHomePath(m.config.Home, string(target))
+	if err != nil {
+		m.state = editingState
+		m.displayError(err.Error())
+		return m.focusInput(folderInput)
+	}
+	renamedPath, err := resolveHomePath(m.config.Home, string(renamed))
+	if err != nil {
+		m.state = editingState
+		m.displayError(err.Error())
+		return m.focusInput(folderInput)
+	}
+	if err := os.MkdirAll(filepath.Dir(renamedPath), os.ModePerm); err != nil {
+		m.state = editingState
+		m.displayError(err.Error())
+		return m.focusInput(folderInput)
+	}
+	if err := os.Rename(currentPath, renamedPath); err != nil {
+		m.state = editingState
+		m.displayError(err.Error())
+		return m.focusInput(folderInput)
+	}
+
+	m.invalidateSearchIndex()
+	m.pane = contentPane
+	return func() tea.Msg {
+		return externalRefreshMsg{selectedFolder: renamed}
 	}
 }
 
